@@ -55,35 +55,8 @@ func (r *RedisCache) Cached(f any) any {
 		out = append(out, t.Out(i))
 	}
 
-	// f should have 0 or 1 context argument, and 1 or more arguments that are Keyable. The last argument should be a pointer to a Serializable.
-	if t.NumIn() < 2 {
-		panic("f should have at least 2 arguments")
-	}
-	for i := 0; i < t.NumIn(); i++ {
-		if i == 0 {
-			if t.In(i) == contextType {
-				continue
-			}
-		}
-		if t.In(i).Implements(keyableType) {
-			continue
-		}
-		if t.In(i).Implements(stringerType) {
-			continue
-		}
-		if t.In(i) == stringType {
-			continue
-		}
-		panic("invalid argument type")
-	}
-
-	// f's return type should be a pointer to a Serializable
-	if t.NumOut() != 2 {
-		panic("f should have exactly 2 return values")
-	}
-	if !t.Out(0).Implements(serializableType) {
-		panic("invalid return type")
-	}
+	r.validateInputParams(in)
+	r.validateOutputParams(out)
 
 	//retTypeInstance := reflect.New(t.Out(0).Elem()).Interface()
 
@@ -91,6 +64,7 @@ func (r *RedisCache) Cached(f any) any {
 	cft := reflect.FuncOf(in, out, false)
 	cf := reflect.MakeFunc(cft, func(args []reflect.Value) []reflect.Value {
 		r.keyForArgs(args)
+
 		// Look up key in cache
 		// If found, return the value
 		// If not found, call f and cache the result
@@ -132,6 +106,30 @@ func (r *RedisCache) Cached(f any) any {
 	return cf.Interface()
 }
 
+func (r *RedisCache) validateInputParams(inputs []reflect.Type) {
+	// f should have 0 or 1 context argument, and 1 or more arguments that are Keyable. The last argument should be a pointer to a Serializable.
+	if len(inputs) < 2 {
+		panic("f should have at least 1 argument")
+	}
+	for i := 0; i < len(inputs); i++ {
+		if i == 0 {
+			if inputs[i] == contextType {
+				continue
+			}
+		}
+		if inputs[i].Implements(keyableType) {
+			continue
+		}
+		if inputs[i].Implements(stringerType) {
+			continue
+		}
+		if inputs[i] == stringType {
+			continue
+		}
+		panic("invalid argument type")
+	}
+}
+
 func (r *RedisCache) keyForArgs(args []reflect.Value) {
 	keyBuilder := strings.Builder{}
 	for i := 0; i < len(args); i++ {
@@ -156,6 +154,16 @@ func (r *RedisCache) keyForArgs(args []reflect.Value) {
 	}
 	key := keyBuilder.String()
 	fmt.Printf("key: %s\n", key)
+}
+
+func (r *RedisCache) validateOutputParams(out []reflect.Type) {
+	// f's return type should be a pointer to a Serializable
+	if len(out) != 2 {
+		panic("f should have exactly 2 return values")
+	}
+	if !out[0].Implements(serializableType) {
+		panic("invalid return type")
+	}
 }
 
 func Cache1[K1 any, T Serializable](c *RedisCache, getter CacheGetter[K1, T]) CacheGetter[K1, T] {

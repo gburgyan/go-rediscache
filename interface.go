@@ -3,6 +3,7 @@ package go_rediscache
 import (
 	"context"
 	"fmt"
+	"github.com/go-redis/redis/v8"
 	"reflect"
 	"strings"
 )
@@ -33,6 +34,7 @@ var errorType = reflect.TypeOf((*error)(nil)).Elem()
 var contextType = reflect.TypeOf((*context.Context)(nil)).Elem()
 
 type RedisCache struct {
+	connection redis.Conn
 }
 
 type CacheGetter[K any, T Serializable] func(context.Context, K) (T, error)
@@ -130,6 +132,16 @@ func (r *RedisCache) validateInputParams(inputs []reflect.Type) {
 	}
 }
 
+func (r *RedisCache) validateOutputParams(out []reflect.Type) {
+	// f's return type should be a pointer to a Serializable
+	if len(out) != 2 {
+		panic("f should have exactly 2 return values")
+	}
+	if !out[0].Implements(serializableType) {
+		panic("invalid return type")
+	}
+}
+
 func (r *RedisCache) keyForArgs(args []reflect.Value) {
 	keyBuilder := strings.Builder{}
 	for i := 0; i < len(args); i++ {
@@ -154,16 +166,6 @@ func (r *RedisCache) keyForArgs(args []reflect.Value) {
 	}
 	key := keyBuilder.String()
 	fmt.Printf("key: %s\n", key)
-}
-
-func (r *RedisCache) validateOutputParams(out []reflect.Type) {
-	// f's return type should be a pointer to a Serializable
-	if len(out) != 2 {
-		panic("f should have exactly 2 return values")
-	}
-	if !out[0].Implements(serializableType) {
-		panic("invalid return type")
-	}
 }
 
 func Cache1[K1 any, T Serializable](c *RedisCache, getter CacheGetter[K1, T]) CacheGetter[K1, T] {

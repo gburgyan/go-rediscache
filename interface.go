@@ -6,6 +6,7 @@ import (
 	"github.com/go-redis/redis/v8"
 	"reflect"
 	"strings"
+	"time"
 )
 
 // Keyable is an interface that can be implemented by a
@@ -24,6 +25,24 @@ type Keyable interface {
 type Serializable interface {
 	Serialize() ([]byte, error)
 	Deserialize([]byte, *any) error
+}
+
+type CacheOptions struct {
+	// TTL is the time-to-live for the cache entry. If TTL is 0, the cache
+	// entry will never expire.
+	TTL time.Duration
+
+	// LockTTL is the time-to-live for the lock on the cache entry. If LockTTL
+	// is 0, the lock will never expire. This controls how long the called function
+	// is allowed to run before the lock expires.
+	LockTTL time.Duration
+
+	// LockWait is the maximum time to wait for a lock on the cache entry.
+	LockWait time.Duration
+
+	// LockRetry is the time to wait before retrying to acquire a lock on the
+	// cache entry.
+	LockRetry time.Duration
 }
 
 var serializableType = reflect.TypeOf((*Serializable)(nil)).Elem()
@@ -65,11 +84,13 @@ func (r *RedisCache) Cached(f any) any {
 	// Use reflection to create a new function that wraps f and caches its result
 	cft := reflect.FuncOf(in, out, false)
 	cf := reflect.MakeFunc(cft, func(args []reflect.Value) []reflect.Value {
-		r.keyForArgs(args)
+		r.keyForArgs(args, out)
 
 		// Look up key in cache
 		// If found, return the value
 		// If not found, call f and cache the result
+
+		// Lock the cache in Redis to prevent multiple instances of the same function from running
 
 		results := realFunction.Call(args)
 
@@ -93,6 +114,8 @@ func (r *RedisCache) Cached(f any) any {
 		serVal := resultValue.Interface().(Serializable)
 		serialized, err := serVal.Serialize()
 		if err != nil {
+			// Unlock the cache
+
 			// Return the error
 			// TODO: if there is an error result slot, set it to the error, otherwise panic.
 			return results
@@ -142,7 +165,7 @@ func (r *RedisCache) validateOutputParams(out []reflect.Type) {
 	}
 }
 
-func (r *RedisCache) keyForArgs(args []reflect.Value) {
+func (r *RedisCache) keyForArgs(args []reflect.Value, out []reflect.Type) {
 	keyBuilder := strings.Builder{}
 	for i := 0; i < len(args); i++ {
 		if i == 0 && args[i].Type() == contextType {

@@ -8,7 +8,8 @@ import (
 	"time"
 )
 
-func (r *RedisCache) getCachedValueOrLock(ctx context.Context, key string) (value []byte, locked bool, err error) {
+func (r *RedisCache) getCachedValueOrLock(ctx context.Context, key string, opts CacheOptions) (value []byte, locked bool, err error) {
+	lockWaitExpire := time.After(opts.LockWait)
 	for {
 		// Attempt to get the value from the cache
 		val, err := r.connection.Get(ctx, key).Bytes()
@@ -20,7 +21,9 @@ func (r *RedisCache) getCachedValueOrLock(ctx context.Context, key string) (valu
 				select {
 				case <-ctx.Done():
 					return nil, false, ctx.Err()
-				case <-time.After(1 * time.Second):
+				case <-lockWaitExpire:
+					return nil, false, errors.New("lock wait expired")
+				case <-time.After(opts.LockRetry):
 					continue
 				}
 			}
@@ -29,7 +32,7 @@ func (r *RedisCache) getCachedValueOrLock(ctx context.Context, key string) (valu
 			return nil, false, err
 		}
 		// The key does not exist in the cache, attempt to lock
-		ok, err := r.connection.SetNX(ctx, key, "", 30*time.Second).Result()
+		ok, err := r.connection.SetNX(ctx, key, "", opts.LockTTL).Result()
 		if ok && err == nil {
 			// Lock successfully acquired
 			return nil, true, nil
@@ -41,7 +44,9 @@ func (r *RedisCache) getCachedValueOrLock(ctx context.Context, key string) (valu
 		select {
 		case <-ctx.Done():
 			return nil, false, ctx.Err()
-		case <-time.After(1 * time.Second):
+		case <-lockWaitExpire:
+			return nil, false, errors.New("lock wait expired")
+		case <-time.After(opts.LockRetry):
 		}
 	}
 }
@@ -106,8 +111,8 @@ func (r *RedisCache) deserializeCacheToResults(value []byte, out []outputValueHa
 	return results, nil
 }
 
-func (r *RedisCache) saveToCache(ctx context.Context, key string, value []byte) {
-	set := r.connection.Set(ctx, key, value, time.Minute)
+func (r *RedisCache) saveToCache(ctx context.Context, key string, value []byte, opts CacheOptions) {
+	set := r.connection.Set(ctx, key, value, opts.TTL)
 	if set.Err() != nil {
 		panic(set.Err())
 	}

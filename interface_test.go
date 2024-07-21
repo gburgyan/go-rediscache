@@ -5,6 +5,7 @@ import (
 	"github.com/go-redis/redis/v8"
 	"github.com/stretchr/testify/assert"
 	"testing"
+	"time"
 )
 
 type resultSerializable struct {
@@ -29,6 +30,13 @@ func TestCache1(t *testing.T) {
 
 	c := &RedisCache{
 		connection: redisConnection.Conn(ctx),
+		opts: CacheOptions{
+			TTL:       time.Minute,
+			LockTTL:   time.Minute,
+			LockWait:  time.Second * 10,
+			LockRetry: time.Millisecond * 200,
+			KeyPrefix: "GoCache-",
+		},
 	}
 
 	f := func(ctx context.Context, s string) (resultSerializable, error) {

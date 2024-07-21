@@ -2,10 +2,13 @@ package go_rediscache
 
 import (
 	"context"
+	"crypto/sha256"
+	"errors"
 	"fmt"
 	"github.com/go-redis/redis/v8"
 	"reflect"
 	"strings"
+	"time"
 )
 
 // Keyable is an interface that can be implemented by a
@@ -34,8 +37,11 @@ var errorType = reflect.TypeOf((*error)(nil)).Elem()
 var contextType = reflect.TypeOf((*context.Context)(nil)).Elem()
 
 type RedisCache struct {
-	connection redis.Conn
+	connection     redis.Conn
+	defaultContext context.Context
 }
+
+type cacheWriteback func(context.Context, string, Serializable) error
 
 type CacheGetter[K any, T Serializable] func(context.Context, K) (T, error)
 type CacheGetter2[K1 any, K2 any, T Serializable] func(context.Context, K1, K2) (T, error)
@@ -50,8 +56,12 @@ func (r *RedisCache) Cached(f any) any {
 
 	in := []reflect.Type{}
 	out := []reflect.Type{}
+	contextIndex := -1
 	for i := 0; i < t.NumIn(); i++ {
 		in = append(in, t.In(i))
+		if t.In(i) == contextType {
+			contextIndex = i
+		}
 	}
 	for i := 0; i < t.NumOut(); i++ {
 		out = append(out, t.Out(i))
@@ -60,14 +70,24 @@ func (r *RedisCache) Cached(f any) any {
 	r.validateInputParams(in)
 	r.validateOutputParams(out)
 
-	//retTypeInstance := reflect.New(t.Out(0).Elem()).Interface()
+	returnTypeKey := makeReturnTypeKey(out)
+
+	//retTypeInstance := reflect.New(t.Out(0).Elem()).Interface().(Serializable)
 
 	// Use reflection to create a new function that wraps f and caches its result
 	cft := reflect.FuncOf(in, out, false)
 	cf := reflect.MakeFunc(cft, func(args []reflect.Value) []reflect.Value {
-		r.keyForArgs(args)
+		var ctx context.Context
+		if contextIndex != -1 {
+			ctx = args[contextIndex].Interface().(context.Context)
+		} else {
+			ctx = r.defaultContext
+		}
+
+		key := r.keyForArgs(args, returnTypeKey)
 
 		// Look up key in cache
+		r.getCachedValueOrLock(ctx, key)
 		// If found, return the value
 		// If not found, call f and cache the result
 
@@ -108,6 +128,22 @@ func (r *RedisCache) Cached(f any) any {
 	return cf.Interface()
 }
 
+// makeReturnTypeKey creates a unique key for the return type of a function. Any
+// error type is ignored. The key is a string representation of the return types.
+func makeReturnTypeKey(out []reflect.Type) string {
+	keyBuilder := strings.Builder{}
+	for i := 0; i < len(out); i++ {
+		if out[i] == errorType {
+			continue
+		}
+		if keyBuilder.Len() > 0 {
+			keyBuilder.WriteString(":")
+		}
+		keyBuilder.WriteString(out[i].String())
+	}
+	return keyBuilder.String()
+}
+
 func (r *RedisCache) validateInputParams(inputs []reflect.Type) {
 	// f should have 0 or 1 context argument, and 1 or more arguments that are Keyable. The last argument should be a pointer to a Serializable.
 	if len(inputs) < 2 {
@@ -142,7 +178,7 @@ func (r *RedisCache) validateOutputParams(out []reflect.Type) {
 	}
 }
 
-func (r *RedisCache) keyForArgs(args []reflect.Value) {
+func (r *RedisCache) keyForArgs(args []reflect.Value, returnTypes string) string {
 	keyBuilder := strings.Builder{}
 	for i := 0; i < len(args); i++ {
 		if i == 0 && args[i].Type() == contextType {
@@ -164,8 +200,16 @@ func (r *RedisCache) keyForArgs(args []reflect.Value) {
 		}
 		panic("invalid argument type")
 	}
+	keyBuilder.WriteString("/")
+	keyBuilder.WriteString(returnTypes)
 	key := keyBuilder.String()
 	fmt.Printf("key: %s\n", key)
+
+	hash := sha256.Sum256([]byte(key))
+	fmt.Printf("hash: %x\n", hash)
+
+	// Return the hash as a string
+	return fmt.Sprintf("%x", hash)
 }
 
 func Cache1[K1 any, T Serializable](c *RedisCache, getter CacheGetter[K1, T]) CacheGetter[K1, T] {
@@ -176,4 +220,31 @@ func Cache1[K1 any, T Serializable](c *RedisCache, getter CacheGetter[K1, T]) Ca
 
 func Cache2[K1 any, K2 any, T Serializable](c *RedisCache, getter CacheGetter2[K1, K2, T]) CacheGetter2[K1, K2, T] {
 	return c.Cached(getter).(CacheGetter2[K1, K2, T])
+}
+
+func (r *RedisCache) getCachedValueOrLock(ctx context.Context, key string) (value []byte, locked bool, err error) {
+	for {
+		// Attempt to get the value from the cache
+		val, err := r.connection.Get(ctx, key).Bytes()
+		if err == nil {
+			if string(val) != "LOCKED" {
+				return val, false, nil
+			} else {
+				// The key is locked, wait for the lock to be released
+				time.Sleep(1 * time.Second)
+				continue
+			}
+		}
+		if !errors.Is(err, redis.Nil) {
+			return nil, false, err
+		}
+		// The key does not exist in the cache, attempt to lock
+		ok, err := r.connection.SetNX(ctx, key, "LOCKED", 30*time.Second).Result()
+		if ok && err == nil {
+			// Lock successfully acquired
+			return nil, true, nil
+		}
+
+		time.Sleep(1 * time.Second)
+	}
 }

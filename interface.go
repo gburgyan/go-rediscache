@@ -26,7 +26,7 @@ type Keyable interface {
 
 type Serializable interface {
 	Serialize() ([]byte, error)
-	Deserialize([]byte, *any) error
+	Deserialize([]byte) (any, error)
 }
 
 type CacheOptions struct {
@@ -55,7 +55,7 @@ var errorType = reflect.TypeOf((*error)(nil)).Elem()
 var contextType = reflect.TypeOf((*context.Context)(nil)).Elem()
 
 type RedisCache struct {
-	connection     redis.Conn
+	connection     *redis.Conn
 	defaultContext context.Context
 }
 
@@ -86,7 +86,7 @@ func (r *RedisCache) Cached(f any) any {
 	}
 
 	r.validateInputParams(in)
-	r.validateOutputParams(out)
+	serializables := r.validateOutputParams(out)
 
 	returnTypeKey := makeReturnTypeKey(out)
 
@@ -105,16 +105,28 @@ func (r *RedisCache) Cached(f any) any {
 		key := r.keyForArgs(args, returnTypeKey)
 
 		// Look up key in cache
-		r.getCachedValueOrLock(ctx, key)
+		cachedValue, _, err2 := r.getCachedValueOrLock(ctx, key)
+		if err2 != nil {
+		}
 		// If found, return the value
+		if cachedValue != nil {
+			// Deserialize the value
+			results, err := r.deserializeCacheToResults(cachedValue, serializables)
+			if err == nil {
+				fmt.Println("Cache hit!")
+				return results
+			}
+			// If we got an error deserializing, we can still
+			// call the main function and cache the result if
+			// it succeeds.
+		}
+
+		fmt.Println("Cache miss!")
+
 		// If not found, call f and cache the result
-
-		// Lock the cache in Redis to prevent multiple instances of the same function from running
-
 		results := realFunction.Call(args)
 
 		// Extract the return value from the results/error
-		var resultValue reflect.Value
 		for _, result := range results {
 			if result.Type() == errorType {
 				if !result.IsNil() {
@@ -122,27 +134,22 @@ func (r *RedisCache) Cached(f any) any {
 					return results
 				}
 			}
-			if result.Type().Implements(serializableType) {
-				resultValue = result
-				break
-			}
-			panic("invalid return type")
 		}
 
 		// Serialize the value
-		serVal := resultValue.Interface().(Serializable)
-		serialized, err := serVal.Serialize()
+		serialized, err := r.serializeResultsToCache(results, out)
 		if err != nil {
-			// Unlock the cache
-
-			// Return the error
-			// TODO: if there is an error result slot, set it to the error, otherwise panic.
+			// unlock the cache
+			r.unlockCache(ctx, key)
+			// If there is an error, log it
 			return results
 		}
 
 		// Store the serialized value in the cache
 		fmt.Printf("serialized: %v\n", serialized)
 
+		cacheValue, err := r.serializeResultsToCache(results, out)
+		r.saveToCache(ctx, key, cacheValue)
 		// Return the value
 
 		return results
@@ -190,14 +197,29 @@ func (r *RedisCache) validateInputParams(inputs []reflect.Type) {
 	}
 }
 
-func (r *RedisCache) validateOutputParams(out []reflect.Type) {
-	// f's return type should be a pointer to a Serializable
-	if len(out) != 2 {
-		panic("f should have exactly 2 return values")
+func (r *RedisCache) validateOutputParams(out []reflect.Type) []Serializable {
+	// The function should return 1 or more serializable types, and an optional error type.
+	// For the serializable types, also make a new instance of each type to allow for serialization.
+	if len(out) == 0 {
+		panic("f should return at least 1 value")
 	}
-	if !out[0].Implements(serializableType) {
+	serializables := make([]Serializable, len(out))
+	errorCount := 0
+	for i := 0; i < len(out); i++ {
+		if out[i].Implements(serializableType) {
+			serializables[i] = reflect.New(out[i]).Interface().(Serializable)
+			continue
+		}
+		if out[i] == errorType {
+			errorCount++
+			if errorCount > 1 {
+				panic("f should return at most 1 error")
+			}
+			continue
+		}
 		panic("invalid return type")
 	}
+	return serializables
 }
 
 func (r *RedisCache) keyForArgs(args []reflect.Value, returnTypes string) string {
@@ -249,24 +271,102 @@ func (r *RedisCache) getCachedValueOrLock(ctx context.Context, key string) (valu
 		// Attempt to get the value from the cache
 		val, err := r.connection.Get(ctx, key).Bytes()
 		if err == nil {
-			if string(val) != "LOCKED" {
+			if len(val) > 0 {
 				return val, false, nil
 			} else {
 				// The key is locked, wait for the lock to be released
-				time.Sleep(1 * time.Second)
-				continue
+				select {
+				case <-ctx.Done():
+					return nil, false, ctx.Err()
+				case <-time.After(1 * time.Second):
+					continue
+				}
 			}
 		}
 		if !errors.Is(err, redis.Nil) {
 			return nil, false, err
 		}
 		// The key does not exist in the cache, attempt to lock
-		ok, err := r.connection.SetNX(ctx, key, "LOCKED", 30*time.Second).Result()
+		ok, err := r.connection.SetNX(ctx, key, "", 30*time.Second).Result()
 		if ok && err == nil {
 			// Lock successfully acquired
 			return nil, true, nil
 		}
+		if err != nil {
+			return nil, false, err
+		}
 
-		time.Sleep(1 * time.Second)
+		select {
+		case <-ctx.Done():
+			return nil, false, ctx.Err()
+		case <-time.After(1 * time.Second):
+		}
+	}
+}
+
+func (r *RedisCache) unlockCache(ctx context.Context, key string) error {
+	// Start the transaction
+	_, err := r.connection.TxPipelined(ctx, func(pipe redis.Pipeliner) error {
+		// Get the value of the key
+		val, err := pipe.Get(ctx, key).Result()
+		if err != nil && !errors.Is(err, redis.Nil) {
+			return err
+		}
+
+		// Check if the key exists and is a 0-byte value
+		if val != "" {
+			// A valid value exists, do not delete the key
+			return nil
+		}
+
+		// Delete the key
+		pipe.Del(ctx, key)
+		return nil
+	})
+
+	return err
+}
+
+func (r *RedisCache) serializeResultsToCache(results []reflect.Value, out []reflect.Type) ([]byte, error) {
+	parts := make([][]byte, len(results))
+	for i := 0; i < len(results); i++ {
+		if out[i].Implements(serializableType) {
+			serialized, err := results[i].Interface().(Serializable).Serialize()
+			if err != nil {
+				return nil, err
+			}
+			parts[i] = serialized
+		}
+	}
+	return serialize(parts)
+}
+
+func (r *RedisCache) deserializeCacheToResults(value []byte, out []Serializable) ([]reflect.Value, error) {
+	parts, err := deserialize(value)
+	if err != nil {
+		return nil, err
+	}
+	if len(parts) != len(out) {
+		return nil, errors.New("invalid number of parts")
+	}
+	results := make([]reflect.Value, len(parts))
+	for i := 0; i < len(parts); i++ {
+		if out[i] != nil {
+			desVal, err := out[i].Deserialize(parts[i])
+			if err != nil {
+				return nil, err
+			}
+			results[i] = reflect.ValueOf(desVal)
+		} else {
+			results[i] = reflect.Zero(errorType)
+		}
+	}
+	return results, nil
+}
+
+func (r *RedisCache) saveToCache(ctx context.Context, key string, value []byte) {
+	set := r.connection.Set(ctx, key, value, time.Minute)
+	if set.Err() != nil {
+		panic(set.Err())
 	}
 }

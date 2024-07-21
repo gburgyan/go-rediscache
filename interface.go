@@ -29,6 +29,24 @@ type Serializable interface {
 	Deserialize([]byte, *any) error
 }
 
+type CacheOptions struct {
+	// TTL is the time-to-live for the cache entry. If TTL is 0, the cache
+	// entry will never expire.
+	TTL time.Duration
+
+	// LockTTL is the time-to-live for the lock on the cache entry. If LockTTL
+	// is 0, the lock will never expire. This controls how long the called function
+	// is allowed to run before the lock expires.
+	LockTTL time.Duration
+
+	// LockWait is the maximum time to wait for a lock on the cache entry.
+	LockWait time.Duration
+
+	// LockRetry is the time to wait before retrying to acquire a lock on the
+	// cache entry.
+	LockRetry time.Duration
+}
+
 var serializableType = reflect.TypeOf((*Serializable)(nil)).Elem()
 var keyableType = reflect.TypeOf((*Keyable)(nil)).Elem()
 var stringerType = reflect.TypeOf((*fmt.Stringer)(nil)).Elem()
@@ -91,6 +109,8 @@ func (r *RedisCache) Cached(f any) any {
 		// If found, return the value
 		// If not found, call f and cache the result
 
+		// Lock the cache in Redis to prevent multiple instances of the same function from running
+
 		results := realFunction.Call(args)
 
 		// Extract the return value from the results/error
@@ -113,6 +133,8 @@ func (r *RedisCache) Cached(f any) any {
 		serVal := resultValue.Interface().(Serializable)
 		serialized, err := serVal.Serialize()
 		if err != nil {
+			// Unlock the cache
+
 			// Return the error
 			// TODO: if there is an error result slot, set it to the error, otherwise panic.
 			return results

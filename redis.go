@@ -83,7 +83,7 @@ func (r *RedisCache) serializeResultsToCache(results []reflect.Value, out []refl
 	return serialize(parts)
 }
 
-func (r *RedisCache) deserializeCacheToResults(value []byte, out []Serializable) ([]reflect.Value, error) {
+func (r *RedisCache) deserializeCacheToResults(value []byte, out []outputValueHandler) ([]reflect.Value, error) {
 	parts, err := deserialize(value)
 	if err != nil {
 		return nil, err
@@ -93,14 +93,14 @@ func (r *RedisCache) deserializeCacheToResults(value []byte, out []Serializable)
 	}
 	results := make([]reflect.Value, len(parts))
 	for i := 0; i < len(parts); i++ {
-		if out[i] != nil {
-			desVal, err := out[i].Deserialize(parts[i])
-			if err != nil {
-				return nil, err
-			}
-			results[i] = reflect.ValueOf(desVal)
+		desVal, err := out[i].deserializer(parts[i])
+		if err != nil {
+			return nil, err
+		}
+		if reflect.TypeOf(desVal) == valueType {
+			results[i] = desVal.(reflect.Value)
 		} else {
-			results[i] = reflect.Zero(errorType)
+			results[i] = reflect.ValueOf(desVal)
 		}
 	}
 	return results, nil

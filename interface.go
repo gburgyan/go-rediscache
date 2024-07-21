@@ -52,16 +52,38 @@ var stringerType = reflect.TypeOf((*fmt.Stringer)(nil)).Elem()
 var stringType = reflect.TypeOf((*string)(nil)).Elem()
 var errorType = reflect.TypeOf((*error)(nil)).Elem()
 var contextType = reflect.TypeOf((*context.Context)(nil)).Elem()
+var valueType = reflect.TypeOf((*reflect.Value)(nil)).Elem()
 
 type RedisCache struct {
 	connection     *redis.Conn
 	defaultContext context.Context
+	typeHandlers   map[reflect.Type]outputValueHandler
 }
 
-type cacheWriteback func(context.Context, string, Serializable) error
+type Serializer func(any) ([]byte, error)
+type Deserializer func([]byte) (any, error)
 
-type CacheGetter[K any, T Serializable] func(context.Context, K) (T, error)
-type CacheGetter2[K1 any, K2 any, T Serializable] func(context.Context, K1, K2) (T, error)
+type outputValueHandler struct {
+	serializer   Serializer
+	deserializer Deserializer
+}
+
+func NewRedisCache(ctx context.Context, connection *redis.Conn) *RedisCache {
+	return &RedisCache{
+		connection:     connection,
+		defaultContext: ctx,
+	}
+}
+
+func (r *RedisCache) RegisterTypeHander(typ reflect.Type, ser Serializer, des Deserializer) {
+	if r.typeHandlers == nil {
+		r.typeHandlers = make(map[reflect.Type]outputValueHandler)
+	}
+	r.typeHandlers[typ] = outputValueHandler{
+		serializer:   ser,
+		deserializer: des,
+	}
+}
 
 func (r *RedisCache) Cached(f any) any {
 	// f should be a function
@@ -194,17 +216,30 @@ func (r *RedisCache) validateInputParams(inputs []reflect.Type) {
 	}
 }
 
-func (r *RedisCache) validateOutputParams(out []reflect.Type) []Serializable {
+func (r *RedisCache) validateOutputParams(out []reflect.Type) []outputValueHandler {
 	// The function should return 1 or more serializable types, and an optional error type.
 	// For the serializable types, also make a new instance of each type to allow for serialization.
 	if len(out) == 0 {
 		panic("f should return at least 1 value")
 	}
-	serializables := make([]Serializable, len(out))
+	serializables := make([]outputValueHandler, len(out))
 	errorCount := 0
 	for i := 0; i < len(out); i++ {
 		if out[i].Implements(serializableType) {
-			serializables[i] = reflect.New(out[i]).Interface().(Serializable)
+			// Make a new instance of the serializable type
+			obj := reflect.New(out[i]).Interface().(Serializable)
+			serializableHandler := outputValueHandler{
+				serializer:   func(o any) ([]byte, error) { return o.(Serializable).Serialize() },
+				deserializer: obj.Deserialize,
+			}
+			serializables[i] = serializableHandler
+			continue
+		}
+		if out[i] == stringType {
+			serializables[i] = outputValueHandler{
+				serializer:   func(o any) ([]byte, error) { return []byte(o.(string)), nil },
+				deserializer: func(data []byte) (any, error) { return string(data), nil },
+			}
 			continue
 		}
 		if out[i] == errorType {
@@ -212,7 +247,17 @@ func (r *RedisCache) validateOutputParams(out []reflect.Type) []Serializable {
 			if errorCount > 1 {
 				panic("f should return at most 1 error")
 			}
+			serializables[i] = outputValueHandler{
+				serializer:   func(o any) ([]byte, error) { return nil, nil },
+				deserializer: func(data []byte) (any, error) { return reflect.Zero(errorType), nil },
+			}
 			continue
+		}
+		if r.typeHandlers != nil {
+			if handler, ok := r.typeHandlers[out[i]]; ok {
+				serializables[i] = handler
+				continue
+			}
 		}
 		panic("invalid return type")
 	}
@@ -251,14 +296,4 @@ func (r *RedisCache) keyForArgs(args []reflect.Value, returnTypes string) string
 
 	// Return the hash as a string
 	return fmt.Sprintf("%x", hash)
-}
-
-func Cache1[K1 any, T Serializable](c *RedisCache, getter CacheGetter[K1, T]) CacheGetter[K1, T] {
-	ret := c.Cached(getter)
-	//reflect.TypeOf(ret).ConvertibleTo(reflect.TypeOf(getter))
-	return ret.(func(context.Context, K1) (T, error))
-}
-
-func Cache2[K1 any, K2 any, T Serializable](c *RedisCache, getter CacheGetter2[K1, K2, T]) CacheGetter2[K1, K2, T] {
-	return c.Cached(getter).(CacheGetter2[K1, K2, T])
 }

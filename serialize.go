@@ -1,4 +1,4 @@
-package go_rediscache
+package rediscache
 
 import (
 	"bytes"

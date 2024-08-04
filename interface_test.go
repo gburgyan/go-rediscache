@@ -1,4 +1,4 @@
-package go_rediscache
+package rediscache
 
 import (
 	"context"
@@ -43,7 +43,7 @@ func TestCache1(t *testing.T) {
 		return resultSerializable{s}, nil
 	}
 
-	cf := Cache1(c, f)
+	cf := Cache(c, f)
 	s, err := cf(ctx, "test")
 
 	time.Sleep(time.Millisecond * 500)

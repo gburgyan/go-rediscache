@@ -4,11 +4,47 @@ Redis is a common place to store cached information in systems. Normally everyon
 
 `go-rediscache` is a tool that will take an existing function and wrap all of the caching logic around it with no additional work by the caller. This is aimed at having a very clean and testable system since the only responsibility of the caller is to supply a function that does work.
 
-As a bonus, this works well with the concepts that are used in the related library `go-ctxdep`
+As a bonus, this works well with the concepts that are used in the related library `go-ctxdep`.
+
+# Usage
+
+Instantiate a new `go-rediscache` object:
+
+```go
+redisConnection := redis.NewClient(&redis.Options{
+    Addr: "localhost:6379",
+})
+
+cache := &rediscahce.NewRedisCache(ctx, redisConnection, CacheOptions{
+        TTL:       time.Minute,
+        LockTTL:   time.Minute,
+        LockWait:  time.Second * 10,
+        LockRetry: time.Millisecond * 200,
+        KeyPrefix: "GoCache-"
+    })
+```
+
+Then, given any function:
+
+```go
+
+func getUserInfo(ctx context.Context, userId string) (string, error) {}
+
+cachedUserInfoFunc := rediscache.Cache(cache, getUserInfo)
+
+result, err := cachedUserInfoFunc(ctx, "User42")
+```
+
+If the user's info was already cached, it will be returned without calling the function. Otherwise, the function is called and the results will be saved.
+
 
 ## Requirements
 
 The requirements for introducing `go-rediscache` to your system are that the paramaters of the function can be used to generate a hash. Underlying this, the function should be stable, such that invoking the same function for the same paramaters should generate identical (or identical semantically) results. The results also need to be able to be marshaled and unmarshalled from to a `[]byte`.
+
+From a high-level perspective, all the inputs are used to construct the cache key which is used to access Redis. The outputs of the function are then saved in the cache. If the same set of inputs are encountered again until the cache expires, the same set of outputs are returned.
+
+Note: The `context.Context` parameter is passed through to the function directly and is _not_ used in the key generation. It is important to ensure that the result of the function that is called does **not** vary based on the context. 
 
 ### Input Parameter Requirements
 

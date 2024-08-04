@@ -1,4 +1,4 @@
-module go-rediscache
+module github.com/gburgyan/go-rediscache
 
 go 1.22
 

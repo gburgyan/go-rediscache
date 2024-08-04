@@ -10,6 +10,40 @@ As a bonus, this works well with the concepts that are used in the related libra
 
 The requirements for introducing `go-rediscache` to your system are that the paramaters of the function can be used to generate a hash. Underlying this, the function should be stable, such that invoking the same function for the same paramaters should generate identical (or identical semantically) results. The results also need to be able to be marshaled and unmarshalled from to a `[]byte`.
 
+### Input Parameter Requirements
+
+Input parameters must be or implement one of these types:
+
+* `string`
+* `Stringer`
+* `Keyable`
+* Registered with `RegisterTypeHandler`
+
+The `Keyable` is defined by the library:
+
+```go
+// Keyable is an interface that can be implemented by a
+// dependency to provide a unique key that can be used to cache the
+// result of the dependency. Implementing this interface is required
+// if you want to use the Cached() function.
+type Keyable interface {
+	// CacheKey returns a key that can be used to cache the result of a
+	// dependency. The key must be unique for the given dependency.
+	// The intent is that the results of calling generators based on the
+	// value represented by this key will be invariant if the key is
+	// the same.
+	CacheKey() string
+}
+```
+
+### Function Result Requirements
+
+The results of a function may only be:
+
+* `error` types
+  * Results of function calls that return non-`nil` are not cached
+* `Serializable`
+* Registered with `RegisterTypeHandler`
 
 ## State Diagram
 

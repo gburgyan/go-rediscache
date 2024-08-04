@@ -34,7 +34,7 @@ func (r *RedisCache) CachedOpts(f any, funcOpts CacheOptions) any {
 	}
 
 	r.validateInputParams(in)
-	serializables := r.validateOutputParams(out)
+	outputValueHandlers := r.validateOutputParams(out)
 
 	returnTypeKey := makeReturnTypeKey(out)
 
@@ -57,7 +57,7 @@ func (r *RedisCache) CachedOpts(f any, funcOpts CacheOptions) any {
 		// If found, return the value
 		if cachedValue != nil {
 			// Deserialize the value
-			results, err := r.deserializeCacheToResults(cachedValue, serializables)
+			results, err := r.deserializeCacheToResults(cachedValue, outputValueHandlers)
 			if err == nil {
 				fmt.Println("Cache hit!")
 				return results

@@ -80,7 +80,7 @@ func NewRedisCache(ctx context.Context, client *redis.Client, opts CacheOptions)
 	}
 }
 
-func (r *RedisCache) RegisterTypeHander(typ reflect.Type, ser Serializer, des Deserializer) {
+func (r *RedisCache) RegisterTypeHandler(typ reflect.Type, ser Serializer, des Deserializer) {
 	r.typeHandlers[typ] = outputValueHandler{
 		serializer:   ser,
 		deserializer: des,

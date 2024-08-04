@@ -71,7 +71,27 @@ type outputValueHandler struct {
 	deserializer Deserializer
 }
 
+// NewRedisCache creates a new instance of RedisCache with the provided context, Redis client, and cache options.
+//
+// Parameters:
+//
+//	ctx (context.Context): The default context to be used for Redis operations.
+//	client (*redis.Client): The Redis client used to interact with the Redis server.
+//	opts (CacheOptions): Configuration options for the cache, including TTL, lock settings, and key prefix.
+//
+// Returns:
+//
+//	*RedisCache: A pointer to the newly created RedisCache instance.
+//
+// Example usage:
+//
+//	ctx := context.Background()
+//	client := redis.NewClient(&redis.Options{Addr: "localhost:6379"})
+//	opts := CacheOptions{}
+//	cache := NewRedisCache(ctx, client, opts)
 func NewRedisCache(ctx context.Context, client *redis.Client, opts CacheOptions) *RedisCache {
+	opts.overlayCacheOptions(defaultCacheOptions)
+
 	return &RedisCache{
 		defaultContext: ctx,
 		connection:     client,
@@ -80,9 +100,52 @@ func NewRedisCache(ctx context.Context, client *redis.Client, opts CacheOptions)
 	}
 }
 
+// RegisterTypeHandler registers a custom serializer and deserializer for a specific type.
+// This allows the RedisCache to handle serialization and deserialization of custom types.
+//
+// Parameters:
+//
+//	typ (reflect.Type): The type for which the custom serializer and deserializer are being registered.
+//	ser (Serializer): A function that takes an instance of the type and returns its serialized byte representation.
+//	des (Deserializer): A function that takes a byte slice and returns an instance of the type.
+//
+// Example usage:
+//
+//	cache.RegisterTypeHandler(reflect.TypeOf(MyType{}), myTypeSerializer, myTypeDeserializer)
+//
+// This function is useful when you have custom types that need special handling for caching in Redis.
 func (r *RedisCache) RegisterTypeHandler(typ reflect.Type, ser Serializer, des Deserializer) {
 	r.typeHandlers[typ] = outputValueHandler{
 		serializer:   ser,
 		deserializer: des,
+	}
+}
+
+var defaultCacheOptions = CacheOptions{
+	TTL:       5 * time.Minute,
+	LockTTL:   10 * time.Second,
+	LockWait:  10 * time.Second,
+	LockRetry: 100 * time.Millisecond,
+	KeyPrefix: "GoCache-",
+}
+
+func (co *CacheOptions) overlayCacheOptions(base CacheOptions) {
+	if co == nil {
+		panic("CacheOptions is nil")
+	}
+	if co.TTL == 0 {
+		co.TTL = base.TTL
+	}
+	if co.LockTTL == 0 {
+		co.LockTTL = base.LockTTL
+	}
+	if co.LockWait == 0 {
+		co.LockWait = base.LockWait
+	}
+	if co.LockRetry == 0 {
+		co.LockRetry = base.LockRetry
+	}
+	if co.KeyPrefix == "" {
+		co.KeyPrefix = base.KeyPrefix
 	}
 }

@@ -9,10 +9,12 @@ import (
 )
 
 func (r *RedisCache) Cached(f any) any {
-	return r.CachedOpts(f, r.opts)
+	return r.CachedOpts(f, CacheOptions{})
 }
 
 func (r *RedisCache) CachedOpts(f any, funcOpts CacheOptions) any {
+	funcOpts.overlayCacheOptions(r.opts)
+
 	// f should be a function
 	t := reflect.TypeOf(f)
 	if t.Kind() != reflect.Func {

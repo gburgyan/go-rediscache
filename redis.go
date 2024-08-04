@@ -4,9 +4,16 @@ import (
 	"context"
 	"errors"
 	"github.com/go-redis/redis/v8"
-	"reflect"
 	"time"
 )
+
+type LockWaitExpiredError struct {
+	message string
+}
+
+func (e *LockWaitExpiredError) Error() string {
+	return e.message
+}
 
 func (r *RedisCache) getCachedValueOrLock(ctx context.Context, key string, opts CacheOptions) (value []byte, locked bool, err error) {
 	lockWaitExpire := time.After(opts.LockWait)
@@ -16,99 +23,57 @@ func (r *RedisCache) getCachedValueOrLock(ctx context.Context, key string, opts 
 		if err == nil {
 			if len(val) > 0 {
 				return val, false, nil
-			} else {
-				// The key is locked, wait for the lock to be released
-				select {
-				case <-ctx.Done():
-					return nil, false, ctx.Err()
-				case <-lockWaitExpire:
-					return nil, false, errors.New("lock wait expired")
-				case <-time.After(opts.LockRetry):
-					continue
-				}
 			}
-		}
-		if !errors.Is(err, redis.Nil) {
-			return nil, false, err
-		}
-		// The key does not exist in the cache, attempt to lock
-		ok, err := r.connection.SetNX(ctx, key, "", opts.LockTTL).Result()
-		if ok && err == nil {
-			// Lock successfully acquired
-			return nil, true, nil
-		}
-		if err != nil {
-			return nil, false, err
+		} else {
+			if !errors.Is(err, redis.Nil) {
+				return nil, false, err
+			}
+			// The key does not exist in the cache, attempt to lock
+			ok, err := r.connection.SetNX(ctx, key, "", opts.LockTTL).Result()
+			if ok && err == nil {
+				// Lock successfully acquired
+				return nil, true, nil
+			}
+			// In case there is an error while setting the lock, this is
+			// likely due to a race with another process. Retry.
 		}
 
 		select {
 		case <-ctx.Done():
 			return nil, false, ctx.Err()
 		case <-lockWaitExpire:
-			return nil, false, errors.New("lock wait expired")
+			return nil, false, &LockWaitExpiredError{}
 		case <-time.After(opts.LockRetry):
+			continue
 		}
 	}
 }
 
 func (r *RedisCache) unlockCache(ctx context.Context, key string) error {
 	// Start the transaction
-	_, err := r.connection.TxPipelined(ctx, func(pipe redis.Pipeliner) error {
+
+	err := r.connection.Watch(ctx, func(tx *redis.Tx) error {
 		// Get the value of the key
-		val, err := pipe.Get(ctx, key).Result()
-		if err != nil && !errors.Is(err, redis.Nil) {
+		bytes, err := r.connection.Get(ctx, key).Bytes()
+		if err != nil {
+			if errors.Is(err, redis.Nil) {
+				return nil
+			}
 			return err
 		}
 
 		// Check if the key exists and is a 0-byte value
-		if val != "" {
+		if len(bytes) > 0 {
 			// A valid value exists, do not delete the key
 			return nil
 		}
 
 		// Delete the key
-		pipe.Del(ctx, key)
+		r.connection.Del(ctx, key)
 		return nil
-	})
+	}, key)
 
 	return err
-}
-
-func (r *RedisCache) serializeResultsToCache(results []reflect.Value, out []reflect.Type) ([]byte, error) {
-	parts := make([][]byte, len(results))
-	for i := 0; i < len(results); i++ {
-		if out[i].Implements(serializableType) {
-			serialized, err := results[i].Interface().(Serializable).Serialize()
-			if err != nil {
-				return nil, err
-			}
-			parts[i] = serialized
-		}
-	}
-	return serialize(parts)
-}
-
-func (r *RedisCache) deserializeCacheToResults(value []byte, out []outputValueHandler) ([]reflect.Value, error) {
-	parts, err := deserialize(value)
-	if err != nil {
-		return nil, err
-	}
-	if len(parts) != len(out) {
-		return nil, errors.New("invalid number of parts")
-	}
-	results := make([]reflect.Value, len(parts))
-	for i := 0; i < len(parts); i++ {
-		desVal, err := out[i].deserializer(parts[i])
-		if err != nil {
-			return nil, err
-		}
-		if reflect.TypeOf(desVal) == valueType {
-			results[i] = desVal.(reflect.Value)
-		} else {
-			results[i] = reflect.ValueOf(desVal)
-		}
-	}
-	return results, nil
 }
 
 func (r *RedisCache) saveToCache(ctx context.Context, key string, value []byte, opts CacheOptions) {

@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"io"
+	"reflect"
 )
 
 func serialize(input [][]byte) ([]byte, error) {
@@ -54,4 +55,41 @@ func deserialize(data []byte) ([][]byte, error) {
 	}
 
 	return result, nil
+}
+
+func (r *RedisCache) serializeResultsToCache(results []reflect.Value, out []reflect.Type) ([]byte, error) {
+	parts := make([][]byte, len(results))
+	for i := 0; i < len(results); i++ {
+		if out[i].Implements(serializableType) {
+			serialized, err := results[i].Interface().(Serializable).Serialize()
+			if err != nil {
+				return nil, err
+			}
+			parts[i] = serialized
+		}
+	}
+	return serialize(parts)
+}
+
+func (r *RedisCache) deserializeCacheToResults(value []byte, out []outputValueHandler) ([]reflect.Value, error) {
+	parts, err := deserialize(value)
+	if err != nil {
+		return nil, err
+	}
+	if len(parts) != len(out) {
+		return nil, errors.New("invalid number of parts")
+	}
+	results := make([]reflect.Value, len(parts))
+	for i := 0; i < len(parts); i++ {
+		desVal, err := out[i].deserializer(parts[i])
+		if err != nil {
+			return nil, err
+		}
+		if reflect.TypeOf(desVal) == valueType {
+			results[i] = desVal.(reflect.Value)
+		} else {
+			results[i] = reflect.ValueOf(desVal)
+		}
+	}
+	return results, nil
 }

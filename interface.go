@@ -58,7 +58,7 @@ var valueType = reflect.TypeOf((*reflect.Value)(nil)).Elem()
 
 type RedisCache struct {
 	defaultContext context.Context
-	connection     *redis.Conn
+	connection     *redis.Client
 	typeHandlers   map[reflect.Type]outputValueHandler
 	opts           CacheOptions
 }
@@ -71,10 +71,10 @@ type outputValueHandler struct {
 	deserializer Deserializer
 }
 
-func NewRedisCache(ctx context.Context, connection *redis.Conn, opts CacheOptions) *RedisCache {
+func NewRedisCache(ctx context.Context, client *redis.Client, opts CacheOptions) *RedisCache {
 	return &RedisCache{
 		defaultContext: ctx,
-		connection:     connection,
+		connection:     client,
 		opts:           opts,
 		typeHandlers:   make(map[reflect.Type]outputValueHandler),
 	}

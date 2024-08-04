@@ -29,7 +29,7 @@ func TestCache1(t *testing.T) {
 	})
 
 	c := &RedisCache{
-		connection: redisConnection.Conn(ctx),
+		connection: redisConnection,
 		opts: CacheOptions{
 			TTL:       time.Minute,
 			LockTTL:   time.Minute,
@@ -45,6 +45,8 @@ func TestCache1(t *testing.T) {
 
 	cf := Cache1(c, f)
 	s, err := cf(ctx, "test")
+
+	time.Sleep(time.Millisecond * 500)
 
 	assert.NoError(t, err)
 	assert.Equal(t, "test", s.Value)

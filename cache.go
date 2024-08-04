@@ -155,6 +155,9 @@ func (r *RedisCache) validateInputParams(inputs []reflect.Type) {
 		if inputs[i] == stringType {
 			continue
 		}
+		if _, found := r.typeHandlers[inputs[i]]; found {
+			continue
+		}
 		panic("invalid argument type")
 	}
 }
@@ -226,6 +229,14 @@ func (r *RedisCache) keyForArgs(args []reflect.Value, returnTypes string, opts C
 		}
 		if args[i].Type() == stringType {
 			keyBuilder.WriteString(args[i].Interface().(string))
+			continue
+		}
+		if handler, found := r.typeHandlers[args[i].Type()]; found {
+			serialized, err := handler.serializer(args[i].Interface())
+			if err != nil {
+				panic(err)
+			}
+			keyBuilder.Write(serialized)
 			continue
 		}
 		panic("invalid argument type")

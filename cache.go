@@ -28,17 +28,20 @@ func (r *RedisCache) CachedOpts(f any, funcOpts CacheOptions) any {
 	}
 	realFunction := reflect.ValueOf(f)
 
-	in := []reflect.Type{}
-	out := []reflect.Type{}
 	contextIndex := -1
+	in := make([]reflect.Type, t.NumIn())
 	for i := 0; i < t.NumIn(); i++ {
-		in = append(in, t.In(i))
+		in[i] = t.In(i)
 		if t.In(i) == contextType {
+			if contextIndex != -1 {
+				panic("f should have at most 1 context argument")
+			}
 			contextIndex = i
 		}
 	}
+	out := make([]reflect.Type, t.NumOut())
 	for i := 0; i < t.NumOut(); i++ {
-		out = append(out, t.Out(i))
+		out[i] = t.Out(i)
 	}
 
 	inputValueHandlers := r.validateInputParams(in)
@@ -206,16 +209,18 @@ func (r *RedisCache) validateOutputParams(out []reflect.Type) []outputValueHandl
 			// Make a new instance of the serializable type
 			obj := reflect.New(out[i]).Interface().(Serializable)
 			serializableHandler := outputValueHandler{
+				typ:          out[i],
 				serializer:   func(o any) ([]byte, error) { return o.(Serializable).Serialize() },
-				deserializer: obj.Deserialize,
+				deserializer: func(_ reflect.Type, data []byte) (any, error) { return obj.Deserialize(data) },
 			}
 			serializables[i] = serializableHandler
 			continue
 		}
 		if out[i] == stringType {
 			serializables[i] = outputValueHandler{
+				typ:          out[i],
 				serializer:   func(o any) ([]byte, error) { return []byte(o.(string)), nil },
-				deserializer: func(data []byte) (any, error) { return string(data), nil },
+				deserializer: func(_ reflect.Type, data []byte) (any, error) { return string(data), nil },
 			}
 			continue
 		}
@@ -225,8 +230,9 @@ func (r *RedisCache) validateOutputParams(out []reflect.Type) []outputValueHandl
 				panic("f should return at most 1 error")
 			}
 			serializables[i] = outputValueHandler{
+				typ:          out[i],
 				serializer:   func(o any) ([]byte, error) { return nil, nil },
-				deserializer: func(data []byte) (any, error) { return reflect.Zero(errorType), nil },
+				deserializer: func(_ reflect.Type, data []byte) (any, error) { return reflect.Zero(errorType), nil },
 			}
 			continue
 		}

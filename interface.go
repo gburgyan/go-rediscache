@@ -66,9 +66,10 @@ type RedisCache struct {
 }
 
 type Serializer func(any) ([]byte, error)
-type Deserializer func([]byte) (any, error)
+type Deserializer func(reflect.Type, []byte) (any, error)
 
 type outputValueHandler struct {
+	typ          reflect.Type
 	serializer   Serializer
 	deserializer Deserializer
 }
@@ -118,36 +119,8 @@ func NewRedisCache(ctx context.Context, client *redis.Client, opts CacheOptions)
 // This function is useful when you have custom types that need special handling for caching in Redis.
 func (r *RedisCache) RegisterTypeHandler(typ reflect.Type, ser Serializer, des Deserializer) {
 	r.typeHandlers[typ] = outputValueHandler{
+		typ:          typ,
 		serializer:   ser,
 		deserializer: des,
-	}
-}
-
-var defaultCacheOptions = CacheOptions{
-	TTL:       5 * time.Minute,
-	LockTTL:   10 * time.Second,
-	LockWait:  10 * time.Second,
-	LockRetry: 100 * time.Millisecond,
-	KeyPrefix: "GoCache-",
-}
-
-func (co *CacheOptions) overlayCacheOptions(base CacheOptions) {
-	if co == nil {
-		panic("CacheOptions is nil")
-	}
-	if co.TTL == 0 {
-		co.TTL = base.TTL
-	}
-	if co.LockTTL == 0 {
-		co.LockTTL = base.LockTTL
-	}
-	if co.LockWait == 0 {
-		co.LockWait = base.LockWait
-	}
-	if co.LockRetry == 0 {
-		co.LockRetry = base.LockRetry
-	}
-	if co.KeyPrefix == "" {
-		co.KeyPrefix = base.KeyPrefix
 	}
 }

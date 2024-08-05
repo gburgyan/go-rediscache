@@ -84,7 +84,7 @@ func (r *RedisCache) deserializeCacheToResults(value []byte, out []outputValueHa
 	}
 	results := make([]reflect.Value, len(parts))
 	for i := 0; i < len(parts); i++ {
-		desVal, err := out[i].deserializer(parts[i])
+		desVal, err := out[i].deserializer(out[i].typ, parts[i])
 		if err != nil {
 			return nil, err
 		}

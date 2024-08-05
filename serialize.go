@@ -57,16 +57,19 @@ func deserialize(data []byte) ([][]byte, error) {
 	return result, nil
 }
 
-func (r *RedisCache) serializeResultsToCache(results []reflect.Value, out []reflect.Type) ([]byte, error) {
-	parts := make([][]byte, len(results))
-	for i := 0; i < len(results); i++ {
-		if out[i].Implements(serializableType) {
-			serialized, err := results[i].Interface().(Serializable).Serialize()
+func (r *RedisCache) serializeResultsToCache(results []reflect.Value, handlers []outputValueHandler, out []reflect.Type) ([]byte, error) {
+	parts := make([][]byte, len(handlers))
+
+	for i := 0; i < len(handlers); i++ {
+		if handlers[i].serializer != nil {
+			serialized, err := handlers[i].serializer(results[i].Interface())
 			if err != nil {
 				return nil, err
 			}
 			parts[i] = serialized
+			continue
 		}
+		return nil, errors.New("invalid return type " + out[i].String())
 	}
 	return serialize(parts)
 }

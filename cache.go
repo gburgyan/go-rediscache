@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"reflect"
+	"runtime"
 	"strings"
 )
 
@@ -75,11 +76,11 @@ func (r *RedisCache) CachedOpts(f any, funcOpts CacheOptions) any {
 		results := realFunction.Call(args)
 
 		// Extract the return value from the results/error
+		isError := false
 		for _, result := range results {
 			if result.Type() == errorType {
 				if !result.IsNil() {
-					// Return the error
-					return results
+					isError = true
 				}
 			}
 		}
@@ -88,31 +89,43 @@ func (r *RedisCache) CachedOpts(f any, funcOpts CacheOptions) any {
 		go func() {
 			// trap any panics
 			defer func() {
-				if r := recover(); r != nil {
-					// Todo: Log the panic
-					fmt.Println("Panic in background cache update")
+				if p := recover(); p != nil {
+					// Log the panic and print stack trace
+					fmt.Printf("Panic in background goroutine saving to cache: %v\n", p)
+					buf := make([]byte, 1<<16)
+					stackSize := runtime.Stack(buf, true)
+					fmt.Printf("Stack trace: %s\n", buf[:stackSize])
 				}
 			}()
 
 			backgroundCtx := context.Background()
-			// Serialize the value
-			serialized, err := r.serializeResultsToCache(results, out)
-			if err != nil {
+
+			var serialized []byte
+			if !isError {
+				var err error
+				// Serialize the value
+				serialized, err = r.serializeResultsToCache(results, outputValueHandlers, out)
+
+				if err != nil {
+					isError = true
+				} else {
+					// Store the serialized value in the cache
+					fmt.Printf("serialized: %v\n", serialized)
+
+					// Saving to the cache does an unlock implicitly.
+					r.saveToCache(ctx, key, serialized, funcOpts)
+				}
+			}
+
+			if isError {
 				// unlock the cache
 				if isLocked {
 					err := r.unlockCache(backgroundCtx, key)
 					if err != nil {
-						// TODO: log error
-						fmt.Println("Error unlocking cache")
 					}
 				}
+				return
 			}
-
-			// Store the serialized value in the cache
-			fmt.Printf("serialized: %v\n", serialized)
-
-			// Saving to the cache does an unlock implicitly.
-			r.saveToCache(ctx, key, serialized, funcOpts)
 		}()
 
 		// Return the value

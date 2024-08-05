@@ -52,6 +52,8 @@ func (r *RedisCache) CachedOpts(f any, funcOpts CacheOptions) any {
 		}
 
 		key := r.keyForArgs(args, returnTypeKey, funcOpts)
+		hash := sha256.Sum256([]byte(key))
+		key = fmt.Sprintf("%s%x", funcOpts.KeyPrefix, hash)
 
 		// Look up key in cache
 		cachedValue, isLocked, err2 := r.getCachedValueOrLock(ctx, key, funcOpts)
@@ -229,24 +231,26 @@ func (r *RedisCache) keyForArgs(args []reflect.Value, returnTypes string, opts C
 	keyBuilder := strings.Builder{}
 
 	for i := 0; i < len(args); i++ {
-		if i == 0 && args[i].Type() == contextType {
+		typ := args[i].Type()
+		if typ.Implements(contextType) {
 			continue
 		}
 		if keyBuilder.Len() > 0 {
 			keyBuilder.WriteString(":")
 		}
-		if args[i].Type().Implements(stringerType) {
+		if typ.Implements(stringerType) {
 			keyBuilder.WriteString(args[i].Interface().(fmt.Stringer).String())
 			continue
 		}
-		if args[i].Type().Implements(keyableType) {
+		if typ.Implements(keyableType) {
 			keyBuilder.WriteString(args[i].Interface().(Keyable).CacheKey())
+			continue
 		}
-		if args[i].Type() == stringType {
+		if typ == stringType {
 			keyBuilder.WriteString(args[i].Interface().(string))
 			continue
 		}
-		if handler, found := r.typeHandlers[args[i].Type()]; found {
+		if handler, found := r.typeHandlers[typ]; found {
 			serialized, err := handler.serializer(args[i].Interface())
 			if err != nil {
 				panic(err)
@@ -261,10 +265,5 @@ func (r *RedisCache) keyForArgs(args []reflect.Value, returnTypes string, opts C
 	key := keyBuilder.String()
 	fmt.Printf("key: %s\n", key)
 
-	hash := sha256.Sum256([]byte(key))
-	finalKey := fmt.Sprintf("%s%x", opts.KeyPrefix, hash)
-	fmt.Printf("hash: %s\n", finalKey)
-
-	// Return the hash as a string
-	return finalKey
+	return key
 }

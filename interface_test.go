@@ -78,7 +78,6 @@ func TestFullIntegration(t *testing.T) {
 
 	cf := Cache(c, f)
 	key := "GoCache-1a1ef8b8c32dca4c95120e68a223b5d58f7aa85af557f08baa19e2d20ce0c592"
-	errorKey := "GoCache-7a7ad968290894a75a20f6ffaa17bdb0b77578651509ba7d7eb2a052d4880f99"
 
 	// First call -- nothing in cache
 	mock.ExpectGet(key).SetErr(redis.Nil)
@@ -109,6 +108,8 @@ func TestFullIntegration(t *testing.T) {
 	mock.ClearExpect()
 
 	// Third call -- error
+	errorKey := "GoCache-7a7ad968290894a75a20f6ffaa17bdb0b77578651509ba7d7eb2a052d4880f99" // Different inputs, hence different key.
+
 	mock.ExpectGet(errorKey).SetErr(redis.Nil)
 	mock.ExpectSetNX(errorKey, "", time.Minute).SetVal(true)
 	mock.ExpectWatch(errorKey)

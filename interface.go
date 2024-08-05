@@ -46,6 +46,8 @@ type CacheOptions struct {
 
 	// KeyPrefix is a prefix that will be added to the key used to store the cache entry.
 	KeyPrefix string
+
+	// TODO: Add way of encrypting the cache entry
 }
 
 var serializableType = reflect.TypeOf((*Serializable)(nil)).Elem()

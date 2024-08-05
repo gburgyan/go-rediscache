@@ -101,7 +101,7 @@ stateDiagram-v2
     RedisCheck --> DeserializeResponse : Found in cache
     RedisCheck --> LockLine : Not found in cache
     LockLine --> LockLine : Already locked (wait)
-    LockLine --> RedisCheck : Found valid data
+    LockLine --> DeserializeResponse : Found valid data
     LockLine --> FillerFunction : Lock successful
     FillerFunction --> UnlockLine : Error
     UnlockLine --> [*] : Return error

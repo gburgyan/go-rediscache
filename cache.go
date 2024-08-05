@@ -9,6 +9,11 @@ import (
 	"strings"
 )
 
+type inputValueHandler struct {
+	serializer func(any) ([]byte, error)
+	skip       bool
+}
+
 func (r *RedisCache) Cached(f any) any {
 	return r.CachedOpts(f, CacheOptions{})
 }
@@ -36,7 +41,7 @@ func (r *RedisCache) CachedOpts(f any, funcOpts CacheOptions) any {
 		out = append(out, t.Out(i))
 	}
 
-	r.validateInputParams(in)
+	inputValueHandlers := r.validateInputParams(in)
 	outputValueHandlers := r.validateOutputParams(out)
 
 	returnTypeKey := makeReturnTypeKey(out)
@@ -51,20 +56,23 @@ func (r *RedisCache) CachedOpts(f any, funcOpts CacheOptions) any {
 			ctx = r.defaultContext
 		}
 
-		key := r.keyForArgs(args, returnTypeKey, funcOpts)
+		key := r.keyForArgs(inputValueHandlers, args, returnTypeKey, funcOpts)
 		hash := sha256.Sum256([]byte(key))
 		key = fmt.Sprintf("%s%x", funcOpts.KeyPrefix, hash)
 
 		// Look up key in cache
-		cachedValue, isLocked, err2 := r.getCachedValueOrLock(ctx, key, funcOpts)
-		if err2 != nil {
+		cachedValue, isLocked, err := r.getCachedValueOrLock(ctx, key, funcOpts)
+		if err != nil {
+			// If there was an error, call the main function and return the results
+			// and try to save the result to the cache in the background anyway.
 		}
+
 		// If found, return the value
 		if cachedValue != nil {
 			// Deserialize the value
 			results, err := r.deserializeCacheToResults(cachedValue, outputValueHandlers)
 			if err == nil {
-				fmt.Println("Cache hit!")
+				//fmt.Println("Cache hit!")
 				return results
 			}
 			// If we got an error deserializing, we can still
@@ -72,7 +80,7 @@ func (r *RedisCache) CachedOpts(f any, funcOpts CacheOptions) any {
 			// it succeeds.
 		}
 
-		fmt.Println("Cache miss!")
+		//fmt.Println("Cache miss!")
 
 		// If not found, call f and cache the result
 		results := realFunction.Call(args)
@@ -152,31 +160,38 @@ func makeReturnTypeKey(out []reflect.Type) string {
 	return keyBuilder.String()
 }
 
-func (r *RedisCache) validateInputParams(inputs []reflect.Type) {
+func (r *RedisCache) validateInputParams(inputs []reflect.Type) []inputValueHandler {
 	// f should have 0 or 1 context argument, and 1 or more arguments that are Keyable. The last argument should be a pointer to a Serializable.
-	if len(inputs) < 2 {
+	if len(inputs) < 1 {
 		panic("f should have at least 1 argument")
 	}
+	result := make([]inputValueHandler, len(inputs))
 	for i := 0; i < len(inputs); i++ {
-		if i == 0 {
-			if inputs[i] == contextType {
-				continue
+		if inputs[i].Implements(contextType) {
+			result[i] = inputValueHandler{skip: true}
+		} else if inputs[i].Implements(keyableType) {
+			result[i] = inputValueHandler{serializer: func(a any) ([]byte, error) {
+				return []byte(a.(Keyable).CacheKey()), nil
+			}}
+		} else if inputs[i].Implements(stringerType) {
+			result[i] = inputValueHandler{serializer: func(a any) ([]byte, error) {
+				return []byte(a.(fmt.Stringer).String()), nil
+			}}
+		} else if inputs[i] == stringType {
+			result[i] = inputValueHandler{serializer: func(a any) ([]byte, error) {
+				return []byte(a.(string)), nil
+			}}
+		} else if _, found := r.typeHandlers[inputs[i]]; found {
+			result[i] = inputValueHandler{
+				serializer: func(a any) ([]byte, error) {
+					return r.typeHandlers[inputs[i]].serializer(a)
+				},
 			}
+		} else {
+			panic("invalid argument type")
 		}
-		if inputs[i].Implements(keyableType) {
-			continue
-		}
-		if inputs[i].Implements(stringerType) {
-			continue
-		}
-		if inputs[i] == stringType {
-			continue
-		}
-		if _, found := r.typeHandlers[inputs[i]]; found {
-			continue
-		}
-		panic("invalid argument type")
 	}
+	return result
 }
 
 func (r *RedisCache) validateOutputParams(out []reflect.Type) []outputValueHandler {
@@ -227,43 +242,26 @@ func (r *RedisCache) validateOutputParams(out []reflect.Type) []outputValueHandl
 	return serializables
 }
 
-func (r *RedisCache) keyForArgs(args []reflect.Value, returnTypes string, opts CacheOptions) string {
+func (r *RedisCache) keyForArgs(handlers []inputValueHandler, args []reflect.Value, returnTypes string, opts CacheOptions) string {
 	keyBuilder := strings.Builder{}
 
-	for i := 0; i < len(args); i++ {
-		typ := args[i].Type()
-		if typ.Implements(contextType) {
+	for i := 0; i < len(handlers); i++ {
+		if handlers[i].skip {
 			continue
 		}
 		if keyBuilder.Len() > 0 {
 			keyBuilder.WriteString(":")
 		}
-		if typ.Implements(stringerType) {
-			keyBuilder.WriteString(args[i].Interface().(fmt.Stringer).String())
-			continue
+		serialized, err := handlers[i].serializer(args[i].Interface())
+		if err != nil {
+			panic(err)
 		}
-		if typ.Implements(keyableType) {
-			keyBuilder.WriteString(args[i].Interface().(Keyable).CacheKey())
-			continue
-		}
-		if typ == stringType {
-			keyBuilder.WriteString(args[i].Interface().(string))
-			continue
-		}
-		if handler, found := r.typeHandlers[typ]; found {
-			serialized, err := handler.serializer(args[i].Interface())
-			if err != nil {
-				panic(err)
-			}
-			keyBuilder.Write(serialized)
-			continue
-		}
-		panic("invalid argument type")
+		keyBuilder.Write(serialized)
 	}
 	keyBuilder.WriteString("/")
 	keyBuilder.WriteString(returnTypes)
 	key := keyBuilder.String()
-	fmt.Printf("key: %s\n", key)
+	//fmt.Printf("key: %s\n", key)
 
 	return key
 }

@@ -173,15 +173,14 @@ func (r *RedisCache) validateInputParams(inputs []reflect.Type) []inputValueHand
 			result[i] = inputValueHandler{serializer: func(a any) ([]byte, error) {
 				return []byte(a.(Keyable).CacheKey()), nil
 			}}
-		} else if inputs[i].Implements(stringerType) {
-			result[i] = inputValueHandler{serializer: func(a any) ([]byte, error) {
-				return []byte(a.(fmt.Stringer).String()), nil
-			}}
 		} else if inputs[i] == stringType {
 			result[i] = inputValueHandler{serializer: func(a any) ([]byte, error) {
 				return []byte(a.(string)), nil
 			}}
 		} else if _, found := r.typeHandlers[inputs[i]]; found {
+			if r.typeHandlers[inputs[i]].serializer == nil {
+				panic("serializer is required for custom types")
+			}
 			result[i] = inputValueHandler{
 				serializer: func(a any) ([]byte, error) {
 					return r.typeHandlers[inputs[i]].serializer(a)
@@ -233,6 +232,12 @@ func (r *RedisCache) validateOutputParams(out []reflect.Type) []outputValueHandl
 		}
 		if r.typeHandlers != nil {
 			if handler, ok := r.typeHandlers[out[i]]; ok {
+				if handler.serializer == nil {
+					panic("serializer is required for custom types")
+				}
+				if handler.deserializer == nil {
+					panic("deserializer is required for custom types")
+				}
 				serializables[i] = handler
 				continue
 			}

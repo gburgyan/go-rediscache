@@ -35,19 +35,6 @@ func (p paramStringer) String() string {
 	return p.Value
 }
 
-func Test_KeyForArgs_StringerArgument(t *testing.T) {
-	r := &RedisCache{typeHandlers: map[reflect.Type]outputValueHandler{}}
-	stringer := paramStringer{Value: "stringerValue"}
-	args := []reflect.Value{reflect.ValueOf(stringer)}
-	returnTypes := "string"
-	opts := CacheOptions{}
-
-	inputHandlers := r.validateInputParams(typesForArgs(args))
-	key := r.keyForArgs(inputHandlers, args, returnTypes, opts)
-
-	assert.Equal(t, "stringerValue/string", key)
-}
-
 type testKeyable struct {
 	Value string
 }

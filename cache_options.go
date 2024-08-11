@@ -29,4 +29,7 @@ func (co *CacheOptions) overlayCacheOptions(base CacheOptions) {
 	if co.KeyPrefix == "" {
 		co.KeyPrefix = base.KeyPrefix
 	}
+	if !co.EnableTiming {
+		co.EnableTiming = base.EnableTiming
+	}
 }

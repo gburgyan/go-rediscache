@@ -32,4 +32,7 @@ func (co *CacheOptions) overlayCacheOptions(base CacheOptions) {
 	if !co.EnableTiming {
 		co.EnableTiming = base.EnableTiming
 	}
+	if co.EncryptionHandler == nil {
+		co.EncryptionHandler = base.EncryptionHandler
+	}
 }

@@ -139,3 +139,31 @@ redis-cache:string > deserialize - 3.125µs
 In this case, the entire cache workflow took 23.708µs, the result was found in Redis and the call to that took 12.417µs. Once it has serialized results, it took 3.125µs to deserialize it into the actual objects.
 
 The default key looks like `redis-cache:` and the return types of the cached function. If you want to use a different key, you can set that in the `CustomTimingName` field of the options. Note that the `CustomTimingName` does _not_ inherit so there is no chance that setting this at the overall cache level will affect the real calls. 
+
+## Encryption
+
+Since the cache values are stored in Redis, which depending on how things are set up in your environment, there are cases where having the values encrypted is a needed feature.
+
+You can set the `EncryptionHandler` to an object that implements the same interface name:
+
+```go
+type EncryptionHandler interface {
+	Encrypt([]byte) ([]byte, error)
+	Decrypt([]byte) ([]byte, error)
+}
+```
+
+Ensure that:
+
+```go
+plaintext []byte{ ...}
+
+cyphertext, _ := provider.Encrypt(plaintext)
+decrypted, _ := provider.Decrypt(cyphertext)
+
+Assert.Equal(t, plaintext, decrypted)
+```
+
+It is important that all instances of a cache that access the same Redis backend be able to decrypt each other's data.
+
+You can use any encryption method that is suitable for your use case. Keep in mind that the cached values may be relatively stable so some information leakage may be present if one were to run a correlation attack against everything stored in Redis. If this is important, something that may be considered is having some salting present in the provided algorithm.

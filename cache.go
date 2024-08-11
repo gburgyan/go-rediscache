@@ -86,6 +86,24 @@ func (r *RedisCache) CachedOpts(f any, funcOpts CacheOptions) any {
 
 		// If found, return the value
 		if cachedValue != nil {
+			if funcOpts.EncryptionHandler != nil {
+				var decryptionComplete timing.Complete
+				if doTiming {
+					_, decryptionComplete = timing.Start(ctx, "decrypt")
+				}
+				// Decrypt the value
+				decrypted, err := funcOpts.EncryptionHandler.Decrypt(cachedValue)
+				if doTiming {
+					decryptionComplete()
+				}
+				if err != nil {
+					// If there was an error decrypting, we can still call the main function
+					// and cache the result if it succeeds.
+				} else {
+					cachedValue = decrypted
+				}
+			}
+
 			// Deserialize the value
 			var complete timing.Complete
 			if doTiming {
@@ -150,8 +168,15 @@ func (r *RedisCache) CachedOpts(f any, funcOpts CacheOptions) any {
 				if err != nil {
 					isError = true
 				} else {
-					// Store the serialized value in the cache
-					fmt.Printf("serialized: %v\n", serialized)
+					if funcOpts.EncryptionHandler != nil {
+						// Encrypt the value
+						encrypted, err := funcOpts.EncryptionHandler.Encrypt(serialized)
+						if err != nil {
+							isError = true
+						} else {
+							serialized = encrypted
+						}
+					}
 
 					// Saving to the cache does an unlock implicitly.
 					r.saveToCache(ctx, key, serialized, funcOpts)

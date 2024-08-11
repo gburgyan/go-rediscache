@@ -55,7 +55,10 @@ type CacheOptions struct {
 	// name will be "redis-cache:<return types>". This setting does not inherit.
 	CustomTimingName string
 
-	// TODO: Add way of encrypting the cache entry
+	// EncryptionHandler is an optional handler that can be used to encrypt and decrypt
+	// cache entries. If set, the cache entries will be encrypted before being stored
+	// in Redis.
+	EncryptionHandler EncryptionHandler
 }
 
 var serializableType = reflect.TypeOf((*Serializable)(nil)).Elem()
@@ -80,6 +83,21 @@ type outputValueHandler struct {
 	typ          reflect.Type
 	serializer   Serializer
 	deserializer Deserializer
+}
+
+// EncryptionHandler is an interface that defines methods for encrypting and decrypting data.
+// Implementing this interface allows custom encryption and decryption logic to be used
+// with the RedisCache.
+//
+// Methods:
+type EncryptionHandler interface {
+	// Encrypt encrypts the given byte slice and returns the encrypted data or an
+	// error if the encryption fails.
+	Encrypt([]byte) ([]byte, error)
+
+	// Decrypt decrypts the given byte slice and returns the decrypted data or an error
+	// if the decryption fails.
+	Decrypt([]byte) ([]byte, error)
 }
 
 // NewRedisCache creates a new instance of RedisCache with the provided context, Redis client, and cache options.

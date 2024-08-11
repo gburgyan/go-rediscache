@@ -23,6 +23,16 @@ func (r resultSerializable) Deserialize(data []byte) (any, error) {
 	return resultSerializable{string(data)}, nil
 }
 
+type nullEncryptor struct{}
+
+func (n nullEncryptor) Encrypt(data []byte) ([]byte, error) {
+	return data, nil
+}
+
+func (n nullEncryptor) Decrypt(data []byte) ([]byte, error) {
+	return data, nil
+}
+
 func TestCache1(t *testing.T) {
 	ctx := context.Background()
 	timingCtx := timing.Root(ctx)
@@ -75,12 +85,13 @@ func TestFullIntegration(t *testing.T) {
 	mockRedis, mock := redismock.NewClientMock()
 
 	c := NewRedisCache(ctx, mockRedis, CacheOptions{
-		TTL:          time.Minute,
-		LockTTL:      time.Minute,
-		LockWait:     time.Second * 10,
-		LockRetry:    time.Millisecond * 200,
-		KeyPrefix:    "GoCache-",
-		EnableTiming: true,
+		TTL:               time.Minute,
+		LockTTL:           time.Minute,
+		LockWait:          time.Second * 10,
+		LockRetry:         time.Millisecond * 200,
+		KeyPrefix:         "GoCache-",
+		EnableTiming:      true,
+		EncryptionHandler: nullEncryptor{},
 	})
 
 	cf := Cache(c, f)

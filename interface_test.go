@@ -2,6 +2,8 @@ package rediscache
 
 import (
 	"context"
+	"fmt"
+	"github.com/gburgyan/go-timing"
 	"github.com/go-redis/redis/v8"
 	"github.com/go-redis/redismock/v8"
 	"github.com/stretchr/testify/assert"
@@ -23,6 +25,7 @@ func (r resultSerializable) Deserialize(data []byte) (any, error) {
 
 func TestCache1(t *testing.T) {
 	ctx := context.Background()
+	timingCtx := timing.Root(ctx)
 
 	// Open a connection to Redis locally
 	redisConnection := redis.NewClient(&redis.Options{
@@ -32,11 +35,12 @@ func TestCache1(t *testing.T) {
 	c := &RedisCache{
 		connection: redisConnection,
 		opts: CacheOptions{
-			TTL:       time.Minute,
-			LockTTL:   time.Minute,
-			LockWait:  time.Second * 10,
-			LockRetry: time.Millisecond * 200,
-			KeyPrefix: "GoCache-",
+			TTL:          time.Minute,
+			LockTTL:      time.Minute,
+			LockWait:     time.Second * 10,
+			LockRetry:    time.Millisecond * 200,
+			KeyPrefix:    "GoCache-",
+			EnableTiming: true,
 		},
 	}
 
@@ -45,12 +49,14 @@ func TestCache1(t *testing.T) {
 	}
 
 	cf := Cache(c, f)
-	s, err := cf(ctx, "test")
+	s, err := cf(timingCtx, "test")
 
 	time.Sleep(time.Millisecond * 500)
 
 	assert.NoError(t, err)
 	assert.Equal(t, "test", s.Value)
+
+	fmt.Println(timingCtx.String())
 }
 
 func TestFullIntegration(t *testing.T) {
@@ -69,11 +75,12 @@ func TestFullIntegration(t *testing.T) {
 	mockRedis, mock := redismock.NewClientMock()
 
 	c := NewRedisCache(ctx, mockRedis, CacheOptions{
-		TTL:       time.Minute,
-		LockTTL:   time.Minute,
-		LockWait:  time.Second * 10,
-		LockRetry: time.Millisecond * 200,
-		KeyPrefix: "GoCache-",
+		TTL:          time.Minute,
+		LockTTL:      time.Minute,
+		LockWait:     time.Second * 10,
+		LockRetry:    time.Millisecond * 200,
+		KeyPrefix:    "GoCache-",
+		EnableTiming: true,
 	})
 
 	cf := Cache(c, f)
@@ -83,21 +90,31 @@ func TestFullIntegration(t *testing.T) {
 	mock.ExpectGet(key).SetErr(redis.Nil)
 	mock.ExpectSetNX(key, "", time.Minute).SetVal(true)
 	mock.ExpectSet(key, []byte{9, 0, 0, 0, 102, 117, 110, 99, 32, 116, 101, 115, 116, 0, 0, 0, 0}, time.Minute).SetVal("OK")
-
-	s, err := cf(ctx, "test")
+	timingCtx := timing.Root(ctx)
+	s, err := cf(timingCtx, "test")
 	time.Sleep(time.Millisecond * 10)
 
 	assert.NoError(t, err)
 	assert.Equal(t, "func test", s)
 	assert.Equal(t, 1, funcCallCount)
 	assert.NoError(t, mock.ExpectationsWereMet())
+
+	assert.Contains(t, timingCtx.Children, "redis-cache:string")
+	assert.True(t, timingCtx.Children["redis-cache:string"].Children["redis"].Details["cache-miss"].(bool))
+
+	fmt.Println(timingCtx.String())
+	fmt.Println()
 
 	mock.ClearExpect()
 
 	// Second call -- cache hit
 	mock.ExpectGet(key).SetVal(string([]byte{9, 0, 0, 0, 102, 117, 110, 99, 32, 116, 101, 115, 116, 0, 0, 0, 0}))
 
-	s, err = cf(ctx, "test")
+	timingCtx = timing.Root(ctx)
+	s, err = cf(timingCtx, "test")
+	fmt.Println(timingCtx.String())
+	fmt.Println()
+
 	time.Sleep(time.Millisecond * 10)
 
 	assert.NoError(t, err)
@@ -105,9 +122,32 @@ func TestFullIntegration(t *testing.T) {
 	assert.Equal(t, 1, funcCallCount)
 	assert.NoError(t, mock.ExpectationsWereMet())
 
+	assert.True(t, timingCtx.Children["redis-cache:string"].Children["redis"].Details["cache-hit"].(bool))
+
 	mock.ClearExpect()
 
-	// Third call -- error
+	// Third call -- cache hit after a lock
+	mock.ExpectGet(key).SetVal(string([]byte{}))
+	mock.ExpectGet(key).SetVal(string([]byte{9, 0, 0, 0, 102, 117, 110, 99, 32, 116, 101, 115, 116, 0, 0, 0, 0}))
+
+	timingCtx = timing.Root(ctx)
+	s, err = cf(timingCtx, "test")
+	fmt.Println(timingCtx.String())
+	fmt.Println()
+
+	time.Sleep(time.Millisecond * 10)
+
+	assert.NoError(t, err)
+	assert.Equal(t, "func test", s)
+	assert.Equal(t, 1, funcCallCount)
+	assert.NoError(t, mock.ExpectationsWereMet())
+
+	assert.True(t, timingCtx.Children["redis-cache:string"].Children["redis"].Details["cache-hit"].(bool))
+	assert.Equal(t, 1, timingCtx.Children["redis-cache:string"].Children["redis"].Details["spins"].(int))
+
+	mock.ClearExpect()
+
+	// Fourth call -- error
 	errorKey := "GoCache-7a7ad968290894a75a20f6ffaa17bdb0b77578651509ba7d7eb2a052d4880f99" // Different inputs, hence different key.
 
 	mock.ExpectGet(errorKey).SetErr(redis.Nil)
@@ -116,11 +156,37 @@ func TestFullIntegration(t *testing.T) {
 	mock.ExpectGet(errorKey).SetVal("")
 	mock.ExpectDel(errorKey).SetVal(1)
 
-	s, err = cf(ctx, "error")
+	timingCtx = timing.Root(ctx)
+	s, err = cf(timingCtx, "error")
+	fmt.Println(timingCtx.String())
+	fmt.Println()
+
 	time.Sleep(time.Millisecond * 10)
 
 	assert.Error(t, err)
 	assert.Equal(t, "", s)
 	assert.Equal(t, 2, funcCallCount)
 	assert.NoError(t, mock.ExpectationsWereMet())
+
+	mock.ClearExpect()
+
+	// Fifth call -- a hit, but with a custom timing name.
+	cfName := CacheOpts(c, f, CacheOptions{CustomTimingName: "custom-timing-name"})
+	mock.ExpectGet(key).SetVal(string([]byte{9, 0, 0, 0, 102, 117, 110, 99, 32, 116, 101, 115, 116, 0, 0, 0, 0}))
+
+	timingCtx = timing.Root(ctx)
+	s, err = cfName(timingCtx, "test")
+	fmt.Println(timingCtx.String())
+	fmt.Println()
+
+	time.Sleep(time.Millisecond * 10)
+
+	assert.NoError(t, err)
+	assert.Equal(t, "func test", s)
+	assert.NoError(t, mock.ExpectationsWereMet())
+
+	assert.True(t, timingCtx.Children["custom-timing-name"].Children["redis"].Details["cache-hit"].(bool))
+
+	mock.ClearExpect()
+
 }

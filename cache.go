@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"fmt"
+	"github.com/gburgyan/go-timing"
 	"reflect"
 	"runtime"
 	"strings"
@@ -53,8 +54,21 @@ func (r *RedisCache) CachedOpts(f any, funcOpts CacheOptions) any {
 	cft := reflect.FuncOf(in, out, false)
 	cf := reflect.MakeFunc(cft, func(args []reflect.Value) []reflect.Value {
 		var ctx context.Context
+		doTiming := false
 		if contextIndex != -1 {
 			ctx = args[contextIndex].Interface().(context.Context)
+			if funcOpts.EnableTiming {
+				doTiming = true
+				var timingName string
+				if funcOpts.CustomTimingName != "" {
+					timingName = funcOpts.CustomTimingName
+				} else {
+					timingName = "redis-cache:" + returnTypeKey
+				}
+				timingCtx, complete := timing.Start(ctx, timingName)
+				defer complete()
+				ctx = timingCtx
+			}
 		} else {
 			ctx = r.defaultContext
 		}
@@ -64,7 +78,7 @@ func (r *RedisCache) CachedOpts(f any, funcOpts CacheOptions) any {
 		key = fmt.Sprintf("%s%x", funcOpts.KeyPrefix, hash)
 
 		// Look up key in cache
-		cachedValue, isLocked, err := r.getCachedValueOrLock(ctx, key, funcOpts)
+		cachedValue, isLocked, err := r.getCachedValueOrLock(ctx, key, funcOpts, doTiming)
 		if err != nil {
 			// If there was an error, call the main function and return the results
 			// and try to save the result to the cache in the background anyway.
@@ -73,7 +87,14 @@ func (r *RedisCache) CachedOpts(f any, funcOpts CacheOptions) any {
 		// If found, return the value
 		if cachedValue != nil {
 			// Deserialize the value
+			var complete timing.Complete
+			if doTiming {
+				_, complete = timing.Start(ctx, "deserialize")
+			}
 			results, err := r.deserializeCacheToResults(cachedValue, outputValueHandlers)
+			if doTiming {
+				complete()
+			}
 			if err == nil {
 				//fmt.Println("Cache hit!")
 				return results
@@ -86,7 +107,14 @@ func (r *RedisCache) CachedOpts(f any, funcOpts CacheOptions) any {
 		//fmt.Println("Cache miss!")
 
 		// If not found, call f and cache the result
+		var fillFuncComplete timing.Complete
+		if doTiming {
+			_, fillFuncComplete = timing.Start(ctx, "fillFunc")
+		}
 		results := realFunction.Call(args)
+		if doTiming {
+			fillFuncComplete()
+		}
 
 		// Extract the return value from the results/error
 		isError := false

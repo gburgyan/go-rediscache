@@ -47,6 +47,14 @@ type CacheOptions struct {
 	// KeyPrefix is a prefix that will be added to the key used to store the cache entry.
 	KeyPrefix string
 
+	// EnableTiming enables timing of the cache entry using the go-timing package. This
+	// will add timing information to the timing context.
+	EnableTiming bool
+
+	// CustomTimingName is the name used for the timing context. If not set, the default
+	// name will be "redis-cache:<return types>". This setting does not inherit.
+	CustomTimingName string
+
 	// TODO: Add way of encrypting the cache entry
 }
 
@@ -122,5 +130,37 @@ func (r *RedisCache) RegisterTypeHandler(typ reflect.Type, ser Serializer, des D
 		typ:          typ,
 		serializer:   ser,
 		deserializer: des,
+	}
+}
+
+var defaultCacheOptions = CacheOptions{
+	TTL:       5 * time.Minute,
+	LockTTL:   10 * time.Second,
+	LockWait:  10 * time.Second,
+	LockRetry: 100 * time.Millisecond,
+	KeyPrefix: "GoCache-",
+}
+
+func (co *CacheOptions) overlayCacheOptions(base CacheOptions) {
+	if co == nil {
+		panic("CacheOptions is nil")
+	}
+	if co.TTL == 0 {
+		co.TTL = base.TTL
+	}
+	if co.LockTTL == 0 {
+		co.LockTTL = base.LockTTL
+	}
+	if co.LockWait == 0 {
+		co.LockWait = base.LockWait
+	}
+	if co.LockRetry == 0 {
+		co.LockRetry = base.LockRetry
+	}
+	if co.KeyPrefix == "" {
+		co.KeyPrefix = base.KeyPrefix
+	}
+	if !co.EnableTiming {
+		co.EnableTiming = base.EnableTiming
 	}
 }

@@ -40,7 +40,7 @@ If the user's info was already cached, it will be returned without calling the f
 
 ## Requirements
 
-The requirements for introducing `go-rediscache` to your system are that the paramaters of the function can be used to generate a hash. Underlying this, the function should be stable, such that invoking the same function for the same paramaters should generate identical (or identical semantically) results. The results also need to be able to be marshaled and unmarshalled from to a `[]byte`.
+The requirements for introducing `go-rediscache` to your system are that the parameters of the function can be used to generate a hash. Underlying this, the function should be stable, such that invoking the same function for the same parameters should generate identical (or identical semantically) results. The results also need to be able to be marshaled and unmarshalled from to a `[]byte`.
 
 From a high-level perspective, all the inputs are used to construct the cache key which is used to access Redis. The outputs of the function are then saved in the cache. If the same set of inputs are encountered again until the cache expires, the same set of outputs are returned.
 
@@ -51,7 +51,6 @@ Note: The `context.Context` parameter is passed through to the function directly
 Input parameters must be or implement one of these types:
 
 * `string`
-* `Stringer`
 * `Keyable`
 * Registered with `RegisterTypeHandler`
 
@@ -77,9 +76,11 @@ type Keyable interface {
 The results of a function may only be:
 
 * `error` types
-  * Results of function calls that return non-`nil` are not cached
+  * Results of function calls that return a non-`nil` error are not cached
 * `Serializable`
 * Registered with `RegisterTypeHandler`
+
+In whatever way the serialization and deserialization happen, an object that is serialized the deserialized from the cached `[]byte` should remain semantically identical to the originally returned object.
 
 ## State Diagram
 
@@ -111,5 +112,30 @@ stateDiagram-v2
     BackgroundSave --> SerializeResponse : Background
     SerializeResponse --> SaveCache
     DeserializeResponse --> [*] : Return cached results
+```
+
+# Options
+
+## Timing
+
+The `go-rediscache` was designed to be able to properly interact with the [`go-timing`](https://github.com/gburgyan/go-timing) package. This can be enabled by using the `EnableTiming` flag on the `CacheOptions` object. Enabling this will cause additional timing contexts to be added to the context to record some additional useful details:
+
+* How long the entire cache call took?
+* If there was any spinning to get a locked cache line, how long was the wait and how many times did it spin?
+* How long the calls to Redis actually took?
+* Was the item found in the cache or not?
+* How long it took to call the backing function if there was a miss?
+* How long did deserialization take?
+
+An example of what this looks like from the output of the unit tests (using a mocked Redis service):
 
 ```
+redis-cache:string - 23.708µs
+redis-cache:string > redis - 14.583µs (cache-hit:true)
+redis-cache:string > redis > get - 12.417µs
+redis-cache:string > deserialize - 3.125µs
+```
+
+In this case, the entire cache workflow took 23.708µs, the result was found in Redis and the call to that took 12.417µs. Once it has serialized results, it took 3.125µs to deserialize it into the actual objects.
+
+The default key looks like `redis-cache:` and the return types of the cached function. If you want to use a different key, you can set that in the `CustomTimingName` field of the options. Note that the `CustomTimingName` does _not_ inherit so there is no chance that setting this at the overall cache level will affect the real calls. 

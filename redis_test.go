@@ -29,7 +29,7 @@ func Test_getCachedValueOrLock_CacheHit(t *testing.T) {
 
 	mock.ExpectGet(key).SetVal("valid-value")
 
-	value, locked, err := c.getCachedValueOrLock(ctx, key, c.opts)
+	value, locked, err := c.getCachedValueOrLock(ctx, key, c.opts, false)
 
 	assert.NoError(t, err)
 	assert.False(t, locked)
@@ -56,7 +56,7 @@ func Test_getCachedValueOrLock_CacheError(t *testing.T) {
 
 	mock.ExpectGet(key).SetErr(errors.New("redis error"))
 
-	value, locked, err := c.getCachedValueOrLock(ctx, key, c.opts)
+	value, locked, err := c.getCachedValueOrLock(ctx, key, c.opts, false)
 
 	assert.Error(t, err)
 	assert.False(t, locked)
@@ -84,7 +84,7 @@ func Test_getCachedValueOrLock_CacheMiss(t *testing.T) {
 	mock.ExpectGet(key).SetErr(redis.Nil)
 	mock.ExpectSetNX(key, "", c.opts.LockTTL).SetVal(true)
 
-	value, locked, err := c.getCachedValueOrLock(ctx, key, c.opts)
+	value, locked, err := c.getCachedValueOrLock(ctx, key, c.opts, false)
 
 	assert.NoError(t, err)
 	assert.True(t, locked)
@@ -112,7 +112,7 @@ func Test_getCachedValueOrLock_LockedToVal(t *testing.T) {
 	mock.ExpectGet(key).SetVal("")
 	mock.ExpectGet(key).SetVal("valid-value")
 
-	value, locked, err := c.getCachedValueOrLock(ctx, key, c.opts)
+	value, locked, err := c.getCachedValueOrLock(ctx, key, c.opts, false)
 
 	assert.NoError(t, err)
 	assert.False(t, locked)
@@ -139,7 +139,7 @@ func Test_getCachedValueOrLock_LockWaitExpired(t *testing.T) {
 
 	mock.ExpectGet(key).SetVal("")
 
-	value, locked, err := c.getCachedValueOrLock(ctx, key, c.opts)
+	value, locked, err := c.getCachedValueOrLock(ctx, key, c.opts, false)
 
 	assert.Error(t, err)
 	assert.False(t, locked)
@@ -168,7 +168,7 @@ func Test_getCachedValueOrLock_LockContextExpired(t *testing.T) {
 
 	mock.ExpectGet(key).SetVal("")
 
-	value, locked, err := c.getCachedValueOrLock(ctx, key, c.opts)
+	value, locked, err := c.getCachedValueOrLock(ctx, key, c.opts, false)
 
 	assert.Error(t, err)
 	assert.False(t, locked)

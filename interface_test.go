@@ -103,7 +103,7 @@ func TestFullIntegration(t *testing.T) {
 	mock.ExpectSet(key, []byte{9, 0, 0, 0, 102, 117, 110, 99, 32, 116, 101, 115, 116, 0, 0, 0, 0}, time.Minute).SetVal("OK")
 	timingCtx := timing.Root(ctx)
 	s, err := cf(timingCtx, "test")
-	time.Sleep(time.Millisecond * 1000)
+	time.Sleep(time.Millisecond * 10)
 
 	assert.NoError(t, err)
 	assert.Equal(t, "func test", s)
@@ -126,7 +126,7 @@ func TestFullIntegration(t *testing.T) {
 	fmt.Println(timingCtx.String())
 	fmt.Println()
 
-	time.Sleep(time.Millisecond * 1000)
+	time.Sleep(time.Millisecond * 10)
 
 	assert.NoError(t, err)
 	assert.Equal(t, "func test", s)
@@ -146,7 +146,7 @@ func TestFullIntegration(t *testing.T) {
 	fmt.Println(timingCtx.String())
 	fmt.Println()
 
-	time.Sleep(time.Millisecond * 1000)
+	time.Sleep(time.Millisecond * 10)
 
 	assert.NoError(t, err)
 	assert.Equal(t, "func test", s)
@@ -172,7 +172,7 @@ func TestFullIntegration(t *testing.T) {
 	fmt.Println(timingCtx.String())
 	fmt.Println()
 
-	time.Sleep(time.Millisecond * 1000)
+	time.Sleep(time.Millisecond * 10)
 
 	assert.Error(t, err)
 	assert.Equal(t, "", s)
@@ -190,7 +190,7 @@ func TestFullIntegration(t *testing.T) {
 	fmt.Println(timingCtx.String())
 	fmt.Println()
 
-	time.Sleep(time.Millisecond * 1000)
+	time.Sleep(time.Millisecond * 10)
 
 	assert.NoError(t, err)
 	assert.Equal(t, "func test", s)

@@ -99,7 +99,7 @@ func (r *RedisCache) CachedOpts(f any, funcOpts CacheOptions) any {
 				}
 			}
 
-			if err != nil {
+			if err == nil {
 				// Deserialize the value
 				var complete timing.Complete
 				if doTiming {

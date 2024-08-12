@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"github.com/gburgyan/go-timing"
+	"log"
 	"reflect"
 	"runtime"
 	"strings"
@@ -110,7 +111,6 @@ func (r *RedisCache) CachedOpts(f any, funcOpts CacheOptions) any {
 					complete()
 				}
 				if err == nil {
-					//fmt.Println("Cache hit!")
 					return results
 				}
 				// If we got an error deserializing, we can still
@@ -118,8 +118,6 @@ func (r *RedisCache) CachedOpts(f any, funcOpts CacheOptions) any {
 				// it succeeds.
 			}
 		}
-
-		//fmt.Println("Cache miss!")
 
 		// If not found, call f and cache the result
 		var fillFuncComplete timing.Complete
@@ -146,11 +144,10 @@ func (r *RedisCache) CachedOpts(f any, funcOpts CacheOptions) any {
 			// trap any panics
 			defer func() {
 				if p := recover(); p != nil {
-					// Log the panic and print stack trace
-					fmt.Printf("Panic in background goroutine saving to cache: %v\n", p)
+					log.Printf("Panic in background goroutine saving to cache: %v\n", p)
 					buf := make([]byte, 1<<16)
 					stackSize := runtime.Stack(buf, true)
-					fmt.Printf("Stack trace: %s\n", buf[:stackSize])
+					log.Printf("Stack trace: %s\n", buf[:stackSize])
 				}
 			}()
 
@@ -322,7 +319,6 @@ func (r *RedisCache) keyForArgs(handlers []inputValueHandler, args []reflect.Val
 	keyBuilder.WriteString("/")
 	keyBuilder.WriteString(returnTypes)
 	key := keyBuilder.String()
-	//fmt.Printf("key: %s\n", key)
 
 	return key
 }

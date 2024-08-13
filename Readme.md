@@ -1,3 +1,7 @@
+# go-rediscache
+
+`go-rediscache` is a Go package designed to simplify the implementation of caching with Redis. It abstracts away the complexity of managing cache keys, handling concurrency, and ensuring consistency, allowing developers to focus on building reliable and performant applications. Whether you're working with expensive function calls, external API requests, or complex data processing, `go-rediscache` helps you avoid redundant operations and optimize resource usage.
+
 # About
 
 Redis is a common place to store cached information in systems. Normally everyone does a simple implementation of this caching and moves on with life. The downside of this approach is that there are many corner cases in implementing this that are hard to account for. Additionally, there are cases where you really don't want to invoke an expensive operation if it's already been invoked by another instance of your system.
@@ -5,6 +9,14 @@ Redis is a common place to store cached information in systems. Normally everyon
 `go-rediscache` is a tool that will take an existing function and wrap all of the caching logic around it with no additional work by the caller. This is aimed at having a very clean and testable system since the only responsibility of the caller is to supply a function that does work.
 
 As a bonus, this works well with the concepts that are used in the related library `go-ctxdep`.
+
+## Installation
+
+To install `go-rediscache`, use the following command:
+
+```bash
+go get github.com/gburgyan/go-rediscache
+```
 
 # Usage
 
@@ -36,6 +48,7 @@ result, err := cachedUserInfoFunc(ctx, "User42")
 ```
 
 If the user's info was already cached, it will be returned without calling the function. Otherwise, the function is called and the results will be saved.
+
 
 
 ## Requirements
@@ -116,6 +129,18 @@ stateDiagram-v2
 
 # Options
 
+## Configuration Options
+
+The `CacheOptions` struct allows you to customize the behavior of the cache:
+
+- `TTL`: Defines the time-to-live for each cache entry. Default is 5 minutes.
+- `LockTTL`: Specifies the duration for which the cache line is locked during a cache miss to prevent race conditions. Default is 10 seconds.
+- `LockWait`: The maximum duration to wait for a lock to be released before giving up. Default is 10 seconds.
+- `LockRetry`: The interval between retries when waiting for a lock. Default is 100 milliseconds.
+- `KeyPrefix`: The prefix for all cache keys to avoid collisions with other cache entries in Redis. Default is "GoCache-"
+- `CustomTimingName`: If using the integration with `go-timing`, this is the name that is used for the timing nodes that are used for cache timing. Default is the types of the result objects.
+- `EncryptionHandler`: If encrypting the cached values stored in Redis, this provides the encryption and decryption functions. The default is storing the values unencrypted and relying on Redis's security to prevent access.
+
 ## Timing
 
 The `go-rediscache` was designed to be able to properly interact with the [`go-timing`](https://github.com/gburgyan/go-timing) package. This can be enabled by using the `EnableTiming` flag on the `CacheOptions` object. Enabling this will cause additional timing contexts to be added to the context to record some additional useful details:
@@ -167,3 +192,7 @@ Assert.Equal(t, plaintext, decrypted)
 It is important that all instances of a cache that access the same Redis backend be able to decrypt each other's data.
 
 You can use any encryption method that is suitable for your use case. Keep in mind that the cached values may be relatively stable so some information leakage may be present if one were to run a correlation attack against everything stored in Redis. If this is important, something that may be considered is having some salting present in the provided algorithm.
+
+# License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.

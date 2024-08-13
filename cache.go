@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"github.com/gburgyan/go-timing"
+	"log"
 	"reflect"
 	"runtime"
 	"strings"
@@ -86,43 +87,37 @@ func (r *RedisCache) CachedOpts(f any, funcOpts CacheOptions) any {
 
 		// If found, return the value
 		if cachedValue != nil {
+			err = nil
 			if funcOpts.EncryptionHandler != nil {
 				var decryptionComplete timing.Complete
 				if doTiming {
 					_, decryptionComplete = timing.Start(ctx, "decrypt")
 				}
 				// Decrypt the value
-				decrypted, err := funcOpts.EncryptionHandler.Decrypt(cachedValue)
+				cachedValue, err = funcOpts.EncryptionHandler.Decrypt(cachedValue)
 				if doTiming {
 					decryptionComplete()
 				}
-				if err != nil {
-					// If there was an error decrypting, we can still call the main function
-					// and cache the result if it succeeds.
-				} else {
-					cachedValue = decrypted
-				}
 			}
 
-			// Deserialize the value
-			var complete timing.Complete
-			if doTiming {
-				_, complete = timing.Start(ctx, "deserialize")
-			}
-			results, err := r.deserializeCacheToResults(cachedValue, outputValueHandlers)
-			if doTiming {
-				complete()
-			}
 			if err == nil {
-				//fmt.Println("Cache hit!")
-				return results
+				// Deserialize the value
+				var complete timing.Complete
+				if doTiming {
+					_, complete = timing.Start(ctx, "deserialize")
+				}
+				results, err := r.deserializeCacheToResults(cachedValue, outputValueHandlers)
+				if doTiming {
+					complete()
+				}
+				if err == nil {
+					return results
+				}
+				// If we got an error deserializing, we can still
+				// call the main function and cache the result if
+				// it succeeds.
 			}
-			// If we got an error deserializing, we can still
-			// call the main function and cache the result if
-			// it succeeds.
 		}
-
-		//fmt.Println("Cache miss!")
 
 		// If not found, call f and cache the result
 		var fillFuncComplete timing.Complete
@@ -149,11 +144,10 @@ func (r *RedisCache) CachedOpts(f any, funcOpts CacheOptions) any {
 			// trap any panics
 			defer func() {
 				if p := recover(); p != nil {
-					// Log the panic and print stack trace
-					fmt.Printf("Panic in background goroutine saving to cache: %v\n", p)
+					log.Printf("Panic in background goroutine saving to cache: %v\n", p)
 					buf := make([]byte, 1<<16)
 					stackSize := runtime.Stack(buf, true)
-					fmt.Printf("Stack trace: %s\n", buf[:stackSize])
+					log.Printf("Stack trace: %s\n", buf[:stackSize])
 				}
 			}()
 
@@ -170,16 +164,16 @@ func (r *RedisCache) CachedOpts(f any, funcOpts CacheOptions) any {
 				} else {
 					if funcOpts.EncryptionHandler != nil {
 						// Encrypt the value
-						encrypted, err := funcOpts.EncryptionHandler.Encrypt(serialized)
+						serialized, err = funcOpts.EncryptionHandler.Encrypt(serialized)
 						if err != nil {
 							isError = true
-						} else {
-							serialized = encrypted
 						}
 					}
 
-					// Saving to the cache does an unlock implicitly.
-					r.saveToCache(ctx, key, serialized, funcOpts)
+					if !isError {
+						// Saving to the cache does an unlock implicitly.
+						r.saveToCache(ctx, key, serialized, funcOpts)
+					}
 				}
 			}
 
@@ -325,7 +319,6 @@ func (r *RedisCache) keyForArgs(handlers []inputValueHandler, args []reflect.Val
 	keyBuilder.WriteString("/")
 	keyBuilder.WriteString(returnTypes)
 	key := keyBuilder.String()
-	//fmt.Printf("key: %s\n", key)
 
 	return key
 }

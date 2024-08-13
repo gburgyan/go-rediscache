@@ -6,9 +6,9 @@
 
 Redis is a common place to store cached information in systems. Normally everyone does a simple implementation of this caching and moves on with life. The downside of this approach is that there are many corner cases in implementing this that are hard to account for. Additionally, there are cases where you really don't want to invoke an expensive operation if it's already been invoked by another instance of your system.
 
-`go-rediscache` is a tool that will take an existing function and wrap all of the caching logic around it with no additional work by the caller. This is aimed at having a very clean and testable system since the only responsibility of the caller is to supply a function that does work.
+`go-rediscache` is a tool that will take an existing function and wrap all of the caching logic around it with no additional work by the caller. This is aimed at creating and maintaining a very clean and testable system since the only responsibility of the caller is to supply a function that does work.
 
-As a bonus, this works well with the concepts that are used in the related library `go-ctxdep`.
+As a bonus, this works well with the concepts that are used in the related library [`go-ctxdep`](https://github.com/gburgyan/go-ctxdep), though this is in no way a requirement.
 
 ## Installation
 
@@ -27,7 +27,7 @@ redisConnection := redis.NewClient(&redis.Options{
     Addr: "localhost:6379",
 })
 
-cache := &rediscahce.NewRedisCache(ctx, redisConnection, CacheOptions{
+cache := rediscache.NewRedisCache(ctx, redisConnection, CacheOptions{
         TTL:       time.Minute,
         LockTTL:   time.Minute,
         LockWait:  time.Second * 10,
@@ -53,7 +53,7 @@ If the user's info was already cached, it will be returned without calling the f
 
 ## Requirements
 
-The requirements for introducing `go-rediscache` to your system are that the parameters of the function can be used to generate a hash. Underlying this, the function should be stable, such that invoking the same function for the same parameters should generate identical (or identical semantically) results. The results also need to be able to be marshaled and unmarshalled from to a `[]byte`.
+The requirements for introducing `go-rediscache` to your system are that the parameters of the function can be used to generate a hash. The function should be stable, such that invoking the same function for the same parameters should generate identical (or identical semantically) results. The results also need to be able to be marshaled and unmarshalled from to a `[]byte`.
 
 From a high-level perspective, all the inputs are used to construct the cache key which is used to access Redis. The outputs of the function are then saved in the cache. If the same set of inputs are encountered again until the cache expires, the same set of outputs are returned.
 
@@ -165,7 +165,7 @@ In this case, the entire cache workflow took 23.708µs, the result was found in 
 
 The default key looks like `redis-cache:` and the return types of the cached function. If you want to use a different key, you can set that in the `CustomTimingName` field of the options. Note that the `CustomTimingName` does _not_ inherit so there is no chance that setting this at the overall cache level will affect the real calls. 
 
-## Encryption
+## Encryption and Security
 
 Since the cache values are stored in Redis, which depending on how things are set up in your environment, there are cases where having the values encrypted is a needed feature.
 
@@ -192,6 +192,8 @@ Assert.Equal(t, plaintext, decrypted)
 It is important that all instances of a cache that access the same Redis backend be able to decrypt each other's data.
 
 You can use any encryption method that is suitable for your use case. Keep in mind that the cached values may be relatively stable so some information leakage may be present if one were to run a correlation attack against everything stored in Redis. If this is important, something that may be considered is having some salting present in the provided algorithm.
+
+The key generation process employs the SHA-256 hashing algorithm, which is recognized for its cryptographic security. Given the requirement for deterministic key generation, the use of salting is not feasible as it would disrupt the stability of the generated keys. Consequently, the primary attack vectors are limited to correlation attacks, such as identifying the presence of a specific key when a particular user, e.g., Alice, logs in.
 
 # License
 

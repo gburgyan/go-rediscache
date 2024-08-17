@@ -85,6 +85,11 @@ type outputValueHandler struct {
 	deserializer Deserializer
 }
 
+type inputValueHandler struct {
+	serializer Serializer
+	skip       bool
+}
+
 // EncryptionHandler is an interface that defines methods for encrypting and decrypting data.
 // Implementing this interface allows custom encryption and decryption logic to be used
 // with the RedisCache.

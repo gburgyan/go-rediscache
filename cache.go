@@ -11,11 +11,6 @@ import (
 	"strings"
 )
 
-type inputValueHandler struct {
-	serializer func(any) ([]byte, error)
-	skip       bool
-}
-
 func (r *RedisCache) Cached(f any) any {
 	return r.CachedOpts(f, CacheOptions{})
 }
@@ -94,9 +89,17 @@ func (r *RedisCache) CachedOpts(f any, funcOpts CacheOptions) any {
 					_, decryptionComplete = timing.Start(ctx, "decrypt")
 				}
 				// Decrypt the value
-				cachedValue, err = funcOpts.EncryptionHandler.Decrypt(cachedValue)
+				var decrypted []byte
+				decrypted, err = funcOpts.EncryptionHandler.Decrypt(cachedValue)
 				if doTiming {
 					decryptionComplete()
+				}
+				if err != nil {
+					// If there was an error decrypting, we can still call the main function
+					// and cache the result if it succeeds.
+					log.Printf("Error decrypting cache value: %v\n", err)
+				} else {
+					cachedValue = decrypted
 				}
 			}
 
@@ -116,6 +119,7 @@ func (r *RedisCache) CachedOpts(f any, funcOpts CacheOptions) any {
 				// If we got an error deserializing, we can still
 				// call the main function and cache the result if
 				// it succeeds.
+				log.Printf("Error deserializing cache value: %v\n", err)
 			}
 		}
 
@@ -227,17 +231,17 @@ func (r *RedisCache) validateInputParams(inputs []reflect.Type) []inputValueHand
 			result[i] = inputValueHandler{serializer: func(a any) ([]byte, error) {
 				return []byte(a.(string)), nil
 			}}
-		} else if _, found := r.typeHandlers[inputs[i]]; found {
-			if r.typeHandlers[inputs[i]].serializer == nil {
+		} else if handler, found := r.typeHandlers[inputs[i]]; found {
+			if handler.serializer == nil {
 				panic("serializer is required for custom types")
 			}
 			result[i] = inputValueHandler{
 				serializer: func(a any) ([]byte, error) {
-					return r.typeHandlers[inputs[i]].serializer(a)
+					return handler.serializer(a)
 				},
 			}
 		} else {
-			panic("invalid argument type")
+			panic("invalid argument type: " + inputs[i].String())
 		}
 	}
 	return result

@@ -17,7 +17,7 @@ func Test_JsonSerializer(t *testing.T) {
 		Name string
 		Age  int
 	}
-	testStructType := reflect.TypeOf(testStruct{})
+	testStructType := reflect.TypeOf((*testStruct)(nil)).Elem()
 
 	structResultFunc := func(in testStruct) testStruct {
 		return in
@@ -76,7 +76,7 @@ func Test_JsonSerializer_Pointers(t *testing.T) {
 		Name string
 		Age  int
 	}
-	testStructPtrType := reflect.TypeOf(&testStruct{})
+	testStructPtrType := reflect.TypeOf((*testStruct)(nil))
 
 	structResultFunc := func(in *testStruct) *testStruct {
 		return in

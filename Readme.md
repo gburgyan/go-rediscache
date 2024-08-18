@@ -95,6 +95,27 @@ The results of a function may only be:
 
 In whatever way the serialization and deserialization happen, an object that is serialized the deserialized from the cached `[]byte` should remain semantically identical to the originally returned object.
 
+### Pointers
+
+There is no special handing of pointers in this package. There are default serializers for some common types, but there is no magic around pointers.
+
+If you need to add a handler for a pointer type:
+
+```go
+// Non-pointer version
+cache.RegisterTypeHandler(reflect.TypeOf((*someType)(nil)).Elem(), rediscache.JsonSerializer, rediscache.JsonDeserializer)
+
+// reflect.TypeOf((*someType)(nil)).Elem() can be replaced with reflect.TypeOf(someType{}) as they
+// are generally interchangeable.
+
+// Pointer version
+cache.RegisterTypeHandler(reflect.TypeOf((*someType)(nil)), rediscache.JsonSerializer, rediscache.JsonDeserializer)
+```
+
+In this case, this is using the included JSON serializer and deserializers. The two lines above are distinct and deal with two different types with differing semantics. This package does not want to assume what the caller's requirements are.
+
+The included JSON serializer and deserializer handles both instances and pointers just fine.
+
 ## State Diagram
 
 ```mermaid
@@ -193,7 +214,9 @@ It is important that all instances of a cache that access the same Redis backend
 
 You can use any encryption method that is suitable for your use case. Keep in mind that the cached values may be relatively stable so some information leakage may be present if one were to run a correlation attack against everything stored in Redis. If this is important, something that may be considered is having some salting present in the provided algorithm.
 
-The key generation process employs the SHA-256 hashing algorithm, which is recognized for its cryptographic security. Given the requirement for deterministic key generation, the use of salting is not feasible as it would disrupt the stability of the generated keys. Consequently, the primary attack vectors are limited to correlation attacks, such as identifying the presence of a specific key when a particular user, e.g., Alice, logs in.
+The key generation process employs the SHA-256 hashing algorithm, which is recognized for its cryptographic security. Given the requirement for deterministic key generation, the use of salting is not feasible as it would disrupt the stability of the generated keys. Consequently, the primary attack vectors are limited to correlation attacks, such as identifying the presence of a specific key when a particular user, e.g., Alice, logs in. Even with salting, given the requirement of stable keys, most attacks would still be possible. Note that this is a limitation of storing things in a database of any type, and not specifically related to this package.
+
+Regardless of what is in this README, always do your own research and be aware of any pitfalls around the entire topic of security.
 
 # License
 

@@ -66,6 +66,7 @@ Input parameters must be or implement one of these types:
 * `string`
 * `Keyable`
 * Registered with `RegisterTypeHandler`
+* Able to be written with `binary.Write` 
 
 The `Keyable` is defined by the library:
 
@@ -83,6 +84,8 @@ type Keyable interface {
 	CacheKey() string
 }
 ```
+
+Regardless of _how_ the key is made, it is critical that anything that can affect the result of the function call must make it into the key.
 
 ### Function Result Requirements
 
@@ -134,10 +137,10 @@ stateDiagram-v2
     [*] --> HashParams
     HashParams --> RedisCheck
     RedisCheck --> DeserializeResponse : Found in cache
+    RedisCheck --> RedisCheck : Already locked (wait)
     RedisCheck --> LockLine : Not found in cache
-    LockLine --> LockLine : Already locked (wait)
-    LockLine --> DeserializeResponse : Found valid data
     LockLine --> FillerFunction : Lock successful
+    LockLine --> RedisCheck : Lock failed (wait)
     FillerFunction --> UnlockLine : Error
     UnlockLine --> [*] : Return error
     

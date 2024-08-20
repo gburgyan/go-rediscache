@@ -151,19 +151,36 @@ stateDiagram-v2
     DeserializeResponse --> [*] : Return cached results
 ```
 
+The looping that occurs in the "check Redis for cached results" works thusly:
+
+- Read the value of the cache key
+  - If the value is present and not empty then it's a cache hit and no further actions are needed
+  - If the value is present and it _is_ empty, that indicates that another instance is in the process of getting the value -- loop and see if it shows up
+  - If no value is present, then the result simply isn't in the Redis cache and we continue
+- Attempt to lock the cache line
+  - Write a blank into the cache line
+  - If it succeeds, then we have locked the cache line and we can call the base function to compute what should go into the cache
+  - It it _fails_ then we hit a race condition and another instance locked it before we did -- simply loop back to reading the cache with the expectation that the value will eventually show up
+
+All of this is handled by `getCachedValueOrLock()` in `redis.go`.
+
 # Options
 
 ## Configuration Options
 
 The `CacheOptions` struct allows you to customize the behavior of the cache:
 
-- `TTL`: Defines the time-to-live for each cache entry. Default is 5 minutes.
+- `TTL`: Defines the time-to-live for each cache entry. Default is 5 minutes. Expiration of the cache is handled entirely by Redis.
 - `LockTTL`: Specifies the duration for which the cache line is locked during a cache miss to prevent race conditions. Default is 10 seconds.
-- `LockWait`: The maximum duration to wait for a lock to be released before giving up. Default is 10 seconds.
-- `LockRetry`: The interval between retries when waiting for a lock. Default is 100 milliseconds.
+- `LockWait`: The maximum duration to wait for a lock to be released before giving up. Default is 10 seconds. This should be greater than the expected time for the call to the base function.
+- `LockRetry`: The interval between retries when waiting for a lock. Default is 100 milliseconds. This controls the polling behavior of the cache is there's another call that is being made at the same time. If this is too low, it'll needlessly increase the load on Redis, if it's too long then it will cause unneeded delays in picking up a value that was cached from another call.
 - `KeyPrefix`: The prefix for all cache keys to avoid collisions with other cache entries in Redis. Default is "GoCache-"
-- `CustomTimingName`: If using the integration with `go-timing`, this is the name that is used for the timing nodes that are used for cache timing. Default is the types of the result objects.
+- `CustomTimingName`: If using the integration with `go-timing`, this is the name that is used for the timing nodes that are used for cache timing. The default is the types of the result objects.
 - `EncryptionHandler`: If encrypting the cached values stored in Redis, this provides the encryption and decryption functions. The default is storing the values unencrypted and relying on Redis's security to prevent access.
+
+Normally `LockWait` and `LockTTL` should be set to the same value. If `LockWait` times out before the `LockTTL` expires, an additional call to the backing function will be made.
+
+The configuration needs to be driven from the needs and behaviors of the system. Generally, the expectation is that there is no contention for a cache line. The retry behavior needs to be tuned to the expected use case.
 
 ## Timing
 
@@ -205,7 +222,7 @@ type EncryptionHandler interface {
 Ensure that:
 
 ```go
-plaintext []byte{ ...}
+plaintext := []byte{ ...}
 
 cyphertext, _ := provider.Encrypt(plaintext)
 decrypted, _ := provider.Decrypt(cyphertext)

@@ -53,6 +53,8 @@ func (r *RedisCache) CachedOpts(f any, funcOpts CacheOptions) any {
 	cf := reflect.MakeFunc(cft, func(args []reflect.Value) []reflect.Value {
 		var ctx context.Context
 		doTiming := false
+
+		// Set the context based on both the base context as well as if the function has a context argument.
 		if contextIndex != -1 {
 			ctx = args[contextIndex].Interface().(context.Context)
 			if funcOpts.EnableTiming {
@@ -78,32 +80,14 @@ func (r *RedisCache) CachedOpts(f any, funcOpts CacheOptions) any {
 		// Look up key in cache
 		cachedValue, isLocked, err := r.getCachedValueOrLock(ctx, key, funcOpts, doTiming)
 		if err != nil {
-			// If there was an error, call the main function and return the results
+			// If there was an error, call the main function and return the callResults
 			// and try to save the result to the cache in the background anyway.
 		}
 
 		// If found, return the value
 		if cachedValue != nil {
 			err = nil
-			if funcOpts.EncryptionHandler != nil {
-				var decryptionComplete timing.Complete
-				if doTiming {
-					_, decryptionComplete = timing.Start(ctx, "decrypt")
-				}
-				// Decrypt the value
-				var decrypted []byte
-				decrypted, err = funcOpts.EncryptionHandler.Decrypt(cachedValue)
-				if doTiming {
-					decryptionComplete()
-				}
-				if err != nil {
-					// If there was an error decrypting, we can still call the main function
-					// and cache the result if it succeeds.
-					log.Printf("Error decrypting cache value: %v\n", err)
-				} else {
-					cachedValue = decrypted
-				}
-			}
+			cachedValue, err = r.handleDecryption(ctx, funcOpts, doTiming, cachedValue)
 
 			if err == nil {
 				// Deserialize the value
@@ -125,24 +109,10 @@ func (r *RedisCache) CachedOpts(f any, funcOpts CacheOptions) any {
 			}
 		}
 
-		// If not found, call f and cache the result
-		var fillFuncComplete timing.Complete
-		if doTiming {
-			_, fillFuncComplete = timing.Start(ctx, "fillFunc")
-		}
-		results := realFunction.Call(args)
-		if doTiming {
-			fillFuncComplete()
-		}
-
-		// Extract the return value from the results/error
+		callResults, err := r.callBackingFunction(ctx, realFunction, args, doTiming)
 		isError := false
-		for _, result := range results {
-			if result.Type() == errorType {
-				if !result.IsNil() {
-					isError = true
-				}
-			}
+		if err != nil {
+			isError = true
 		}
 
 		// Update the cache in the background
@@ -161,24 +131,19 @@ func (r *RedisCache) CachedOpts(f any, funcOpts CacheOptions) any {
 
 			var serialized []byte
 			if !isError {
-				var err error
 				// Serialize the value
-				serialized, err = r.serializeResultsToCache(results, outputValueHandlers, out)
+				serialized, err = r.serializeResultsToCache(funcOpts, callResults, outputValueHandlers)
 
 				if err != nil {
 					isError = true
 				} else {
-					if funcOpts.EncryptionHandler != nil {
-						// Encrypt the value
-						serialized, err = funcOpts.EncryptionHandler.Encrypt(serialized)
-						if err != nil {
-							isError = true
-						}
-					}
+					serialized, err = r.handleEncryption(funcOpts, serialized)
 
-					if !isError {
+					if err == nil {
 						// Saving to the cache does an unlock implicitly.
 						r.saveToCache(ctx, key, serialized, funcOpts)
+					} else {
+						isError = true
 					}
 				}
 			}
@@ -195,9 +160,65 @@ func (r *RedisCache) CachedOpts(f any, funcOpts CacheOptions) any {
 		}()
 
 		// Return the value
-		return results
+		return callResults
 	})
 	return cf.Interface()
+}
+
+func (r *RedisCache) handleEncryption(funcOpts CacheOptions, serialized []byte) ([]byte, error) {
+	if funcOpts.EncryptionHandler == nil {
+		return serialized, nil
+	}
+	// Encrypt the value
+	return funcOpts.EncryptionHandler.Encrypt(serialized)
+}
+
+func (r *RedisCache) handleDecryption(ctx context.Context, funcOpts CacheOptions, doTiming bool, cachedValue []byte) ([]byte, error) {
+	if funcOpts.EncryptionHandler == nil {
+		return cachedValue, nil
+	}
+
+	var decryptionComplete timing.Complete
+	if doTiming {
+		_, decryptionComplete = timing.Start(ctx, "decrypt")
+	}
+	// Decrypt the value
+	decrypted, err := funcOpts.EncryptionHandler.Decrypt(cachedValue)
+	if doTiming {
+		decryptionComplete()
+	}
+	if err != nil {
+		// If there was an error decrypting, we can still call the main function
+		// and cache the result if it succeeds.
+		log.Printf("Error decrypting cache value: %v\n", err)
+	} else {
+		cachedValue = decrypted
+	}
+
+	return cachedValue, err
+}
+
+func (r *RedisCache) callBackingFunction(ctx context.Context, realFunction reflect.Value, args []reflect.Value, doTiming bool) ([]reflect.Value, error) {
+	// If not found, call f and cache the result
+	var fillFuncComplete timing.Complete
+	if doTiming {
+		_, fillFuncComplete = timing.Start(ctx, "fillFunc")
+	}
+	results := realFunction.Call(args)
+	if doTiming {
+		fillFuncComplete()
+	}
+
+	// Extract the return value from the results/error
+	var err error
+	for _, result := range results {
+		if result.Type() == errorType {
+			if !result.IsNil() {
+				err = result.Interface().(error)
+			}
+		}
+	}
+	return results, err
 }
 
 // makeReturnTypeKey creates a unique key for the return type of a function. Any

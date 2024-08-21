@@ -1,8 +1,10 @@
 package rediscache
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/binary"
 	"fmt"
 	"github.com/gburgyan/go-timing"
 	"log"
@@ -221,27 +223,41 @@ func (r *RedisCache) validateInputParams(inputs []reflect.Type) []inputValueHand
 	}
 	result := make([]inputValueHandler, len(inputs))
 	for i := 0; i < len(inputs); i++ {
-		if inputs[i].Implements(contextType) {
+		typ := inputs[i]
+		switch {
+		case typ.Implements(contextType):
 			result[i] = inputValueHandler{skip: true}
-		} else if inputs[i].Implements(keyableType) {
+		case typ.Implements(keyableType):
 			result[i] = inputValueHandler{serializer: func(a any) ([]byte, error) {
 				return []byte(a.(Keyable).CacheKey()), nil
 			}}
-		} else if inputs[i] == stringType {
+		case typ == stringType:
 			result[i] = inputValueHandler{serializer: func(a any) ([]byte, error) {
 				return []byte(a.(string)), nil
 			}}
-		} else if handler, found := r.typeHandlers[inputs[i]]; found {
-			if handler.serializer == nil {
-				panic("serializer is required for custom types")
+		case r.typeHandlers != nil:
+			if handler, found := r.typeHandlers[typ]; found {
+				if handler.serializer == nil {
+					panic("serializer is required for custom types")
+				}
+				result[i] = inputValueHandler{
+					serializer: func(a any) ([]byte, error) {
+						return handler.serializer(a)
+					},
+				}
 			}
+
+		default:
 			result[i] = inputValueHandler{
 				serializer: func(a any) ([]byte, error) {
-					return handler.serializer(a)
+					buf := new(bytes.Buffer)
+					err := binary.Write(buf, binary.LittleEndian, a)
+					if err != nil {
+						return nil, err
+					}
+					return buf.Bytes(), nil
 				},
 			}
-		} else {
-			panic("invalid argument type: " + inputs[i].String())
 		}
 	}
 	return result
@@ -256,39 +272,37 @@ func (r *RedisCache) validateOutputParams(out []reflect.Type) []outputValueHandl
 	serializables := make([]outputValueHandler, len(out))
 	errorCount := 0
 	for i := 0; i < len(out); i++ {
-		if out[i].Implements(serializableType) {
-			// Make a new instance of the serializable type
-			obj := reflect.New(out[i]).Interface().(Serializable)
+		typ := out[i]
+		switch {
+		case typ.Implements(serializableType):
+			obj := reflect.New(typ).Interface().(Serializable)
 			serializableHandler := outputValueHandler{
-				typ:          out[i],
+				typ:          typ,
 				serializer:   func(o any) ([]byte, error) { return o.(Serializable).Serialize() },
 				deserializer: func(_ reflect.Type, data []byte) (any, error) { return obj.Deserialize(data) },
 			}
 			serializables[i] = serializableHandler
 			continue
-		}
-		if out[i] == stringType {
+		case typ == stringType:
 			serializables[i] = outputValueHandler{
-				typ:          out[i],
+				typ:          typ,
 				serializer:   func(o any) ([]byte, error) { return []byte(o.(string)), nil },
 				deserializer: func(_ reflect.Type, data []byte) (any, error) { return string(data), nil },
 			}
 			continue
-		}
-		if out[i] == errorType {
+		case typ == errorType:
 			errorCount++
 			if errorCount > 1 {
 				panic("f should return at most 1 error")
 			}
 			serializables[i] = outputValueHandler{
-				typ:          out[i],
+				typ:          typ,
 				serializer:   func(o any) ([]byte, error) { return nil, nil },
 				deserializer: func(_ reflect.Type, data []byte) (any, error) { return reflect.Zero(errorType), nil },
 			}
 			continue
-		}
-		if r.typeHandlers != nil {
-			if handler, ok := r.typeHandlers[out[i]]; ok {
+		case r.typeHandlers != nil:
+			if handler, ok := r.typeHandlers[typ]; ok {
 				if handler.serializer == nil {
 					panic("serializer is required for custom types")
 				}

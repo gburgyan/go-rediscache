@@ -66,6 +66,7 @@ Input parameters must be or implement one of these types:
 * `string`
 * `Keyable`
 * Registered with `RegisterTypeHandler`
+* Able to be written with `binary.Write` 
 
 The `Keyable` is defined by the library:
 
@@ -84,6 +85,8 @@ type Keyable interface {
 }
 ```
 
+Regardless of _how_ the key is made, it is critical that anything that can affect the result of the function call must make it into the key.
+
 ### Function Result Requirements
 
 The results of a function may only be:
@@ -94,6 +97,27 @@ The results of a function may only be:
 * Registered with `RegisterTypeHandler`
 
 In whatever way the serialization and deserialization happen, an object that is serialized the deserialized from the cached `[]byte` should remain semantically identical to the originally returned object.
+
+### Pointers
+
+There is no special handing of pointers in this package. There are default serializers for some common types, but there is no magic around pointers.
+
+If you need to add a handler for a pointer type:
+
+```go
+// Non-pointer version
+cache.RegisterTypeHandler(reflect.TypeOf((*someType)(nil)).Elem(), rediscache.JsonSerializer, rediscache.JsonDeserializer)
+
+// reflect.TypeOf((*someType)(nil)).Elem() can be replaced with reflect.TypeOf(someType{}) as they
+// are generally interchangeable.
+
+// Pointer version
+cache.RegisterTypeHandler(reflect.TypeOf((*someType)(nil)), rediscache.JsonSerializer, rediscache.JsonDeserializer)
+```
+
+In this case, this is using the included JSON serializer and deserializers. The two lines above are distinct and deal with two different types with differing semantics. This package does not want to assume what the caller's requirements are.
+
+The included JSON serializer and deserializer handles both instances and pointers just fine.
 
 ## State Diagram
 
@@ -113,10 +137,10 @@ stateDiagram-v2
     [*] --> HashParams
     HashParams --> RedisCheck
     RedisCheck --> DeserializeResponse : Found in cache
+    RedisCheck --> RedisCheck : Already locked (wait)
     RedisCheck --> LockLine : Not found in cache
-    LockLine --> LockLine : Already locked (wait)
-    LockLine --> DeserializeResponse : Found valid data
     LockLine --> FillerFunction : Lock successful
+    LockLine --> RedisCheck : Lock failed (wait)
     FillerFunction --> UnlockLine : Error
     UnlockLine --> [*] : Return error
     
@@ -127,19 +151,36 @@ stateDiagram-v2
     DeserializeResponse --> [*] : Return cached results
 ```
 
+The looping that occurs in the "check Redis for cached results" works thusly:
+
+- Read the value of the cache key
+  - If the value is present and not empty then it's a cache hit and no further actions are needed
+  - If the value is present and it _is_ empty, that indicates that another instance is in the process of getting the value -- loop and see if it shows up
+  - If no value is present, then the result simply isn't in the Redis cache and we continue
+- Attempt to lock the cache line
+  - Write a blank into the cache line
+  - If it succeeds, then we have locked the cache line and we can call the base function to compute what should go into the cache
+  - It it _fails_ then we hit a race condition and another instance locked it before we did -- simply loop back to reading the cache with the expectation that the value will eventually show up
+
+All of this is handled by `getCachedValueOrLock()` in `redis.go`.
+
 # Options
 
 ## Configuration Options
 
 The `CacheOptions` struct allows you to customize the behavior of the cache:
 
-- `TTL`: Defines the time-to-live for each cache entry. Default is 5 minutes.
+- `TTL`: Defines the time-to-live for each cache entry. Default is 5 minutes. Expiration of the cache is handled entirely by Redis.
 - `LockTTL`: Specifies the duration for which the cache line is locked during a cache miss to prevent race conditions. Default is 10 seconds.
-- `LockWait`: The maximum duration to wait for a lock to be released before giving up. Default is 10 seconds.
-- `LockRetry`: The interval between retries when waiting for a lock. Default is 100 milliseconds.
+- `LockWait`: The maximum duration to wait for a lock to be released before giving up. Default is 10 seconds. This should be greater than the expected time for the call to the base function.
+- `LockRetry`: The interval between retries when waiting for a lock. Default is 100 milliseconds. This controls the polling behavior of the cache is there's another call that is being made at the same time. If this is too low, it'll needlessly increase the load on Redis, if it's too long then it will cause unneeded delays in picking up a value that was cached from another call.
 - `KeyPrefix`: The prefix for all cache keys to avoid collisions with other cache entries in Redis. Default is "GoCache-"
-- `CustomTimingName`: If using the integration with `go-timing`, this is the name that is used for the timing nodes that are used for cache timing. Default is the types of the result objects.
+- `CustomTimingName`: If using the integration with `go-timing`, this is the name that is used for the timing nodes that are used for cache timing. The default is the types of the result objects.
 - `EncryptionHandler`: If encrypting the cached values stored in Redis, this provides the encryption and decryption functions. The default is storing the values unencrypted and relying on Redis's security to prevent access.
+
+Normally `LockWait` and `LockTTL` should be set to the same value. If `LockWait` times out before the `LockTTL` expires, an additional call to the backing function will be made.
+
+The configuration needs to be driven from the needs and behaviors of the system. Generally, the expectation is that there is no contention for a cache line. The retry behavior needs to be tuned to the expected use case.
 
 ## Timing
 
@@ -181,7 +222,7 @@ type EncryptionHandler interface {
 Ensure that:
 
 ```go
-plaintext []byte{ ...}
+plaintext := []byte{ ...}
 
 cyphertext, _ := provider.Encrypt(plaintext)
 decrypted, _ := provider.Decrypt(cyphertext)
@@ -193,7 +234,9 @@ It is important that all instances of a cache that access the same Redis backend
 
 You can use any encryption method that is suitable for your use case. Keep in mind that the cached values may be relatively stable so some information leakage may be present if one were to run a correlation attack against everything stored in Redis. If this is important, something that may be considered is having some salting present in the provided algorithm.
 
-The key generation process employs the SHA-256 hashing algorithm, which is recognized for its cryptographic security. Given the requirement for deterministic key generation, the use of salting is not feasible as it would disrupt the stability of the generated keys. Consequently, the primary attack vectors are limited to correlation attacks, such as identifying the presence of a specific key when a particular user, e.g., Alice, logs in.
+The key generation process employs the SHA-256 hashing algorithm, which is recognized for its cryptographic security. Given the requirement for deterministic key generation, the use of salting is not feasible as it would disrupt the stability of the generated keys. Consequently, the primary attack vectors are limited to correlation attacks, such as identifying the presence of a specific key when a particular user, e.g., Alice, logs in. Even with salting, given the requirement of stable keys, most attacks would still be possible. Note that this is a limitation of storing things in a database of any type, and not specifically related to this package.
+
+Regardless of what is in this README, always do your own research and be aware of any pitfalls around the entire topic of security.
 
 # License
 

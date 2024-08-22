@@ -6,9 +6,10 @@ import (
 	"errors"
 	"io"
 	"reflect"
+	"time"
 )
 
-func serialize(input [][]byte) ([]byte, error) {
+func combineBytes(input [][]byte) ([]byte, error) {
 	var buf bytes.Buffer
 
 	for _, slice := range input {
@@ -30,7 +31,7 @@ func serialize(input [][]byte) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-func deserialize(data []byte) ([][]byte, error) {
+func splitBytes(data []byte) ([][]byte, error) {
 	buf := bytes.NewReader(data)
 	result := [][]byte{}
 
@@ -57,8 +58,8 @@ func deserialize(data []byte) ([][]byte, error) {
 	return result, nil
 }
 
-func (r *RedisCache) serializeResultsToCache(opts CacheOptions, results []reflect.Value, handlers []outputValueHandler) ([]byte, error) {
-	parts := make([][]byte, len(handlers))
+func serializeResultsToCache(opts CacheOptions, results []reflect.Value, handlers []outputValueHandler) ([]byte, error) {
+	parts := make([][]byte, len(handlers)+1)
 
 	for i := 0; i < len(handlers); i++ {
 		if handlers[i].serializer != nil {
@@ -71,22 +72,32 @@ func (r *RedisCache) serializeResultsToCache(opts CacheOptions, results []reflec
 		}
 		return nil, errors.New("invalid return type " + handlers[i].typ.String())
 	}
-	return serialize(parts)
-}
 
-func (r *RedisCache) deserializeCacheToResults(value []byte, out []outputValueHandler) ([]reflect.Value, error) {
-	parts, err := deserialize(value)
+	now := opts.now()
+	marshalBinary, err := now.MarshalBinary()
 	if err != nil {
 		return nil, err
 	}
-	if len(parts) != len(out) {
-		return nil, errors.New("invalid number of parts")
+	parts[len(handlers)] = marshalBinary
+
+	return combineBytes(parts)
+}
+
+func deserializeCacheToResults(value []byte, out []outputValueHandler) ([]reflect.Value, time.Time, error) {
+	parts, err := splitBytes(value)
+	if err != nil {
+		return nil, time.Time{}, err
 	}
-	results := make([]reflect.Value, len(parts))
-	for i := 0; i < len(parts); i++ {
+
+	if len(parts) != len(out)+1 {
+		return nil, time.Time{}, errors.New("invalid number of parts")
+	}
+	results := make([]reflect.Value, len(out))
+
+	for i := 0; i < len(out); i++ {
 		desVal, err := out[i].deserializer(out[i].typ, parts[i])
 		if err != nil {
-			return nil, err
+			return nil, time.Time{}, err
 		}
 		if reflect.TypeOf(desVal) == valueType {
 			results[i] = desVal.(reflect.Value)
@@ -94,5 +105,11 @@ func (r *RedisCache) deserializeCacheToResults(value []byte, out []outputValueHa
 			results[i] = reflect.ValueOf(desVal)
 		}
 	}
-	return results, nil
+
+	var saveTime time.Time
+	if err := saveTime.UnmarshalBinary(parts[len(parts)-1]); err != nil {
+		return nil, time.Time{}, err
+	}
+
+	return results, saveTime, nil
 }

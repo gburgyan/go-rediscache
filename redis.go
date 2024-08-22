@@ -16,6 +16,18 @@ func (e *LockWaitExpiredError) Error() string {
 	return e.message
 }
 
+// getCachedValueOrLock attempts to retrieve a value from the cache or acquire a lock if the value is not present.
+//
+// Parameters:
+// - ctx: The context in which the operation is performed.
+// - key: The cache key for the entry to be retrieved or locked.
+// - opts: CacheOptions containing the configuration for caching behavior.
+// - doTiming: A boolean indicating whether to measure the execution time of the operation.
+//
+// Returns:
+// - value: A byte slice representing the cached value, or nil if the value is not present.
+// - locked: A boolean indicating whether a lock was successfully acquired.
+// - err: An error if the operation fails.
 func (r *RedisCache) getCachedValueOrLock(ctx context.Context, key string, opts CacheOptions, doTiming bool) (value []byte, locked bool, err error) {
 	var timingCtx *timing.Context
 	if doTiming {
@@ -32,7 +44,8 @@ func (r *RedisCache) getCachedValueOrLock(ctx context.Context, key string, opts 
 		if doTiming {
 			_, getComplete = timing.Start(timingCtx, "get")
 		}
-		val, err := r.connection.Get(ctx, key).Bytes()
+		getResult := r.connection.Get(ctx, key)
+		val, err := getResult.Bytes()
 		if doTiming {
 			getComplete()
 		}
@@ -93,6 +106,14 @@ func (r *RedisCache) getCachedValueOrLock(ctx context.Context, key string, opts 
 	}
 }
 
+// unlockCache attempts to unlock a cache entry by deleting the key if it is a 0-byte value.
+//
+// Parameters:
+// - ctx: The context in which the operation is performed.
+// - key: The cache key for the entry to be unlocked.
+//
+// Returns:
+// - An error if the operation fails, or nil if the key is successfully unlocked or does not need unlocking.
 func (r *RedisCache) unlockCache(ctx context.Context, key string) error {
 	// Start the transaction
 
@@ -120,9 +141,45 @@ func (r *RedisCache) unlockCache(ctx context.Context, key string) error {
 	return err
 }
 
+// saveToCache stores the given value in the cache with the specified key and options.
+//
+// Parameters:
+// - ctx: The context in which the operation is performed.
+// - key: The cache key for the entry to be stored.
+// - value: The byte slice representing the value to be cached.
+// - opts: CacheOptions containing the configuration for caching behavior.
+//
+// Panics:
+// - If the operation to set the value in the cache fails.
 func (r *RedisCache) saveToCache(ctx context.Context, key string, value []byte, opts CacheOptions) {
 	set := r.connection.Set(ctx, key, value, opts.TTL)
 	if set.Err() != nil {
 		panic(set.Err())
 	}
+}
+
+// lockRefresh attempts to acquire a lock for refreshing the cache entry.
+//
+// Parameters:
+// - ctx: The context in which the operation is performed.
+// - key: The cache key for the entry to be locked.
+// - opts: CacheOptions containing the configuration for caching behavior.
+//
+// Returns:
+// - An error if the operation to acquire the lock fails.
+func (r *RedisCache) lockRefresh(ctx context.Context, key string, opts CacheOptions) error {
+	fullKey := key + "-refresh"
+	_, err := r.connection.SetNX(ctx, fullKey, "", opts.LockTTL).Result()
+	return err
+}
+
+// unlockRefresh releases the lock for refreshing the cache entry.
+//
+// Parameters:
+// - ctx: The context in which the operation is performed.
+// - key: The cache key for the entry to be unlocked.
+// - opts: CacheOptions containing the configuration for caching behavior.
+func (r *RedisCache) unlockRefresh(ctx context.Context, key string, opts CacheOptions) {
+	fullKey := key + "-refresh"
+	r.connection.Del(ctx, fullKey)
 }

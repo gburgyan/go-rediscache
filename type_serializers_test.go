@@ -34,6 +34,7 @@ func Test_JsonSerializer(t *testing.T) {
 		KeyPrefix:         "GoCache-",
 		EnableTiming:      false,
 		EncryptionHandler: nil,
+		now:               func() time.Time { return time.Time{} },
 	})
 
 	c.RegisterTypeHandler(testStructType, JsonSerializer, JsonDeserializer)
@@ -47,7 +48,9 @@ func Test_JsonSerializer(t *testing.T) {
 
 	key := "GoCache-16a3c53e35dfc078f98d413eba6f9e1c2d275ea37e5dcb170cb78e8524ca620d"
 	cacheContents := `{"Name":"Bob Dobbs","Age":42}`
-	cacheVal, _ := serialize([][]byte{[]byte(cacheContents)})
+	zeroTime := time.Time{}
+	zeroTimeBytes, _ := zeroTime.MarshalBinary()
+	cacheVal, _ := combineBytes([][]byte{[]byte(cacheContents), zeroTimeBytes})
 
 	mock.ExpectGet(key).SetErr(redis.Nil)
 	mock.ExpectSet(key, cacheVal, time.Minute).SetVal("OK")
@@ -93,6 +96,7 @@ func Test_JsonSerializer_Pointers(t *testing.T) {
 		KeyPrefix:         "GoCache-",
 		EnableTiming:      false,
 		EncryptionHandler: nil,
+		now:               func() time.Time { return time.Time{} },
 	})
 
 	c.RegisterTypeHandler(testStructPtrType, JsonSerializer, JsonDeserializer)
@@ -106,7 +110,9 @@ func Test_JsonSerializer_Pointers(t *testing.T) {
 
 	key := "GoCache-4a6f895bdcb69a054143f49c112caf763f0c85535b86e5202a7bfb38dfe29d43"
 	cacheContents := `{"Name":"Bob Dobbs","Age":42}`
-	cacheVal, _ := serialize([][]byte{[]byte(cacheContents)})
+	zeroTime := time.Time{}
+	zeroTimeBytes, _ := zeroTime.MarshalBinary()
+	cacheVal, _ := combineBytes([][]byte{[]byte(cacheContents), zeroTimeBytes})
 
 	mock.ExpectGet(key).SetErr(redis.Nil)
 	mock.ExpectSet(key, cacheVal, time.Minute).SetVal("OK")

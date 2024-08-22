@@ -42,17 +42,14 @@ func TestCache1(t *testing.T) {
 		Addr: "localhost:6379",
 	})
 
-	c := &RedisCache{
-		connection: redisConnection,
-		opts: CacheOptions{
-			TTL:          time.Minute,
-			LockTTL:      time.Minute,
-			LockWait:     time.Second * 10,
-			LockRetry:    time.Millisecond * 200,
-			KeyPrefix:    "GoCache-",
-			EnableTiming: true,
-		},
-	}
+	c := NewRedisCache(ctx, redisConnection, CacheOptions{
+		TTL:          time.Minute,
+		LockTTL:      time.Minute,
+		LockWait:     time.Second * 10,
+		LockRetry:    time.Millisecond * 200,
+		KeyPrefix:    "GoCache-",
+		EnableTiming: true,
+	})
 
 	f := func(ctx context.Context, s string) (resultSerializable, error) {
 		return resultSerializable{s}, nil
@@ -92,6 +89,7 @@ func TestFullIntegration(t *testing.T) {
 		KeyPrefix:         "GoCache-",
 		EnableTiming:      true,
 		EncryptionHandler: nullEncryptor{},
+		now:               func() time.Time { return time.Date(2024, 8, 21, 23, 22, 0, 0, time.UTC) },
 	})
 
 	cf := Cache(c, f)
@@ -100,7 +98,7 @@ func TestFullIntegration(t *testing.T) {
 	// First call -- nothing in cache
 	mock.ExpectGet(key).SetErr(redis.Nil)
 	mock.ExpectSetNX(key, "", time.Minute).SetVal(true)
-	mock.ExpectSet(key, []byte{9, 0, 0, 0, 102, 117, 110, 99, 32, 116, 101, 115, 116, 0, 0, 0, 0}, time.Minute).SetVal("OK")
+	mock.ExpectSet(key, []byte{9, 0, 0, 0, 102, 117, 110, 99, 32, 116, 101, 115, 116, 0, 0, 0, 0, 15, 0, 0, 0, 1, 0, 0, 0, 14, 222, 88, 109, 152, 0, 0, 0, 0, 255, 255}, time.Minute).SetVal("OK")
 	timingCtx := timing.Root(ctx)
 	s, err := cf(timingCtx, "test")
 	time.Sleep(time.Millisecond * 10)
@@ -119,7 +117,7 @@ func TestFullIntegration(t *testing.T) {
 	mock.ClearExpect()
 
 	// Second call -- cache hit
-	mock.ExpectGet(key).SetVal(string([]byte{9, 0, 0, 0, 102, 117, 110, 99, 32, 116, 101, 115, 116, 0, 0, 0, 0}))
+	mock.ExpectGet(key).SetVal(string([]byte{9, 0, 0, 0, 102, 117, 110, 99, 32, 116, 101, 115, 116, 0, 0, 0, 0, 15, 0, 0, 0, 1, 0, 0, 0, 14, 222, 88, 109, 152, 0, 0, 0, 0, 255, 255}))
 
 	timingCtx = timing.Root(ctx)
 	s, err = cf(timingCtx, "test")
@@ -139,7 +137,7 @@ func TestFullIntegration(t *testing.T) {
 
 	// Third call -- cache hit after a lock
 	mock.ExpectGet(key).SetVal(string([]byte{}))
-	mock.ExpectGet(key).SetVal(string([]byte{9, 0, 0, 0, 102, 117, 110, 99, 32, 116, 101, 115, 116, 0, 0, 0, 0}))
+	mock.ExpectGet(key).SetVal(string([]byte{9, 0, 0, 0, 102, 117, 110, 99, 32, 116, 101, 115, 116, 0, 0, 0, 0, 15, 0, 0, 0, 1, 0, 0, 0, 14, 222, 88, 109, 152, 0, 0, 0, 0, 255, 255}))
 
 	timingCtx = timing.Root(ctx)
 	s, err = cf(timingCtx, "test")
@@ -183,7 +181,7 @@ func TestFullIntegration(t *testing.T) {
 
 	// Fifth call -- a hit, but with a custom timing name.
 	cfName := CacheOpts(c, f, CacheOptions{CustomTimingName: "custom-timing-name"})
-	mock.ExpectGet(key).SetVal(string([]byte{9, 0, 0, 0, 102, 117, 110, 99, 32, 116, 101, 115, 116, 0, 0, 0, 0}))
+	mock.ExpectGet(key).SetVal(string([]byte{9, 0, 0, 0, 102, 117, 110, 99, 32, 116, 101, 115, 116, 0, 0, 0, 0, 15, 0, 0, 0, 1, 0, 0, 0, 14, 222, 88, 109, 152, 0, 0, 0, 0, 255, 255}))
 
 	timingCtx = timing.Root(ctx)
 	s, err = cfName(timingCtx, "test")

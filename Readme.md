@@ -177,10 +177,15 @@ The `CacheOptions` struct allows you to customize the behavior of the cache:
 - `KeyPrefix`: The prefix for all cache keys to avoid collisions with other cache entries in Redis. Default is "GoCache-"
 - `CustomTimingName`: If using the integration with `go-timing`, this is the name that is used for the timing nodes that are used for cache timing. The default is the types of the result objects.
 - `EncryptionHandler`: If encrypting the cached values stored in Redis, this provides the encryption and decryption functions. The default is storing the values unencrypted and relying on Redis's security to prevent access.
+- `EnableLogging`: If set to `true`, the cache will log information about the cache hits and misses. Default is `false`.
+- `RefreshPercentage`: The percentage of the TTL that will be used to refresh the cache. Default is 0.0, which means that the cache will not be refreshed. If set to 0.8, the cache will be refreshed 80% of the way through the TTL. This is useful for ensuring that the cache is always up-to-date and that the cache is not stale. In case of a refresh, it will be done in the background go routine and the old value will be returned to the caller.
+- `RefreshAlpha`: The alpha value used to calculate the probability of refreshing the cache entry. The time range between when a cache entry is eligible for refresh and the TTL-LockTTL is scaled to the range [0, 1] and called x. The probability of refreshing the cache entry is calculated as x^(alpha-1). If RefreshAlpha is 1 or less, the cache entry will be refreshed immediately when it is eligible for refresh. A higher alpha value will make it less likely that the cache entry will be refreshed. A value of 0 will inherit the default alpha for the cache. An alpha of two will be a linear ramp of probabilities from 0 to 1. Default is 1 which will immediately refresh the cache upon it being eligible.
 
 Normally `LockWait` and `LockTTL` should be set to the same value. If `LockWait` times out before the `LockTTL` expires, an additional call to the backing function will be made.
 
 The configuration needs to be driven from the needs and behaviors of the system. Generally, the expectation is that there is no contention for a cache line. The retry behavior needs to be tuned to the expected use case.
+
+In very high contention cases, tuning the alpha can be useful to prevent overly aggressive refresh locks in the cache.
 
 ## Timing
 

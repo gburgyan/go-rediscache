@@ -3,11 +3,16 @@ package rediscache
 import "time"
 
 var defaultCacheOptions = CacheOptions{
-	TTL:       5 * time.Minute,
-	LockTTL:   10 * time.Second,
-	LockWait:  10 * time.Second,
-	LockRetry: 100 * time.Millisecond,
-	KeyPrefix: "GoCache-",
+	TTL:               5 * time.Minute,
+	LockTTL:           10 * time.Second,
+	LockWait:          10 * time.Second,
+	LockRetry:         100 * time.Millisecond,
+	KeyPrefix:         "GoCache-",
+	EnableTiming:      false,
+	EncryptionHandler: nil,
+	RefreshPercentage: 0.8,
+	RefreshAlpha:      1,
+	now:               time.Now,
 }
 
 func (co *CacheOptions) overlayCacheOptions(base CacheOptions) {
@@ -34,5 +39,14 @@ func (co *CacheOptions) overlayCacheOptions(base CacheOptions) {
 	}
 	if co.EncryptionHandler == nil {
 		co.EncryptionHandler = base.EncryptionHandler
+	}
+	if co.RefreshPercentage == 0 {
+		co.RefreshPercentage = base.RefreshPercentage
+	}
+	if co.RefreshAlpha == 0 {
+		co.RefreshAlpha = base.RefreshAlpha
+	}
+	if co.now == nil {
+		co.now = base.now
 	}
 }

@@ -2,7 +2,6 @@ package rediscache
 
 import (
 	"context"
-	"fmt"
 	"github.com/go-redis/redis/v8"
 	"reflect"
 	"time"
@@ -21,8 +20,24 @@ type Keyable interface {
 	CacheKey() string
 }
 
+// Serializable is an interface that defines methods for serializing and deserializing data.
+// Implementing this interface allows custom types to be serialized to and deserialized from byte slices.
 type Serializable interface {
+	// Serialize converts the implementing type to a byte slice.
+	//
+	// Returns:
+	// - A byte slice representing the serialized data.
+	// - An error if the serialization fails.
 	Serialize() ([]byte, error)
+
+	// Deserialize converts a byte slice to the implementing type.
+	//
+	// Parameters:
+	// - data: A byte slice representing the serialized data.
+	//
+	// Returns:
+	// - The deserialized instance of the implementing type.
+	// - An error if the deserialization fails.
 	Deserialize([]byte) (any, error)
 }
 
@@ -30,6 +45,23 @@ type CacheOptions struct {
 	// TTL is the time-to-live for the cache entry. If TTL is 0, the cache
 	// entry will never expire in Redis.
 	TTL time.Duration
+
+	// RefreshPercentage expresses the percentage of the TTL at which the cache
+	// entry should be refreshed. If RefreshPercentage is 1, the cache entry will
+	// not be refreshed. If RefreshPercentage is 0.5, the cache entry will be refreshed
+	// halfway through its TTL. This setting is useful for ensuring that the cache
+	// entry is always fresh and fetching new data before the cache entry expires.
+	RefreshPercentage float64
+
+	// RefreshAlpha is the alpha value used to calculate the probability of refreshing
+	// the cache entry. The time range between when a cache entry is eligible for
+	// refresh and the TTL-LockTTL is scaled to the range [0, 1] and called x.
+	// The probability of refreshing the cache entry is calculated as x^(alpha-1).
+	// If RefreshAlpha is 1 or less, the cache entry will be refreshed immediately
+	// when it is eligible for refresh. A higher alpha value will make it less likely
+	// that the cache entry will be refreshed.
+	// A value of 0 will inherit the default alpha for the cache.
+	RefreshAlpha float64
 
 	// LockTTL is the time-to-live for the lock on the cache entry. If LockTTL
 	// is 0, the lock will never expire. This controls how long the called function
@@ -59,11 +91,14 @@ type CacheOptions struct {
 	// cache entries. If set, the cache entries will be encrypted before being stored
 	// in Redis.
 	EncryptionHandler EncryptionHandler
+
+	// now is a function that returns the current time. This is used for testing purposes
+	// to mock the current time.
+	now func() time.Time
 }
 
 var serializableType = reflect.TypeOf((*Serializable)(nil)).Elem()
 var keyableType = reflect.TypeOf((*Keyable)(nil)).Elem()
-var stringerType = reflect.TypeOf((*fmt.Stringer)(nil)).Elem()
 var stringType = reflect.TypeOf((*string)(nil)).Elem()
 var errorType = reflect.TypeOf((*error)(nil)).Elem()
 var contextType = reflect.TypeOf((*context.Context)(nil)).Elem()
@@ -76,7 +111,27 @@ type RedisCache struct {
 	opts           CacheOptions
 }
 
+// Serializer is a function type that defines a method for serializing data.
+// It takes an input of any type and returns a byte slice and an error.
+//
+// Parameters:
+// - any: The input data to be serialized.
+//
+// Returns:
+// - A byte slice representing the serialized data.
+// - An error if the serialization fails.
 type Serializer func(any) ([]byte, error)
+
+// Deserializer is a function type that defines a method for deserializing data.
+// It takes a reflect.Type and a byte slice, and returns an instance of the type and an error.
+//
+// Parameters:
+// - reflect.Type: The type to which the data should be deserialized.
+// - []byte: The byte slice representing the serialized data.
+//
+// Returns:
+// - An instance of the deserialized type.
+// - An error if the deserialization fails.
 type Deserializer func(reflect.Type, []byte) (any, error)
 
 type outputValueHandler struct {

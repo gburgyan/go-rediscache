@@ -36,7 +36,7 @@ func Benchmark_CacheHit(b *testing.B) {
 
 	cfn := Cache(cache, fn)
 	key := "GoCache-2631e43346c3d8b4a341e560ec2b609b6db0250448ce49a048f4197e8558cc3b"
-	serVal, _ := serialize([][]byte{[]byte("value")})
+	serVal, _ := combineBytes([][]byte{[]byte("value")})
 	val := string(serVal)
 
 	for i := 0; i < b.N; i++ {
@@ -59,7 +59,7 @@ func Benchmark_CacheHit_Timing(b *testing.B) {
 
 	cfn := Cache(cache, fn)
 	key := "GoCache-2631e43346c3d8b4a341e560ec2b609b6db0250448ce49a048f4197e8558cc3b"
-	serVal, _ := serialize([][]byte{[]byte("value")})
+	serVal, _ := combineBytes([][]byte{[]byte("value")})
 	val := string(serVal)
 
 	for i := 0; i < b.N; i++ {

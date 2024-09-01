@@ -58,7 +58,7 @@ func splitBytes(data []byte) ([][]byte, error) {
 	return result, nil
 }
 
-func serializeResultsToCache(opts CacheOptions, results []reflect.Value, handlers []outputValueHandler) ([]byte, error) {
+func serializeResultsToCache(opts CacheOptions, results []reflect.Value, handlers []valueHandler) ([]byte, error) {
 	parts := make([][]byte, len(handlers)+1)
 
 	for i := 0; i < len(handlers); i++ {
@@ -83,7 +83,7 @@ func serializeResultsToCache(opts CacheOptions, results []reflect.Value, handler
 	return combineBytes(parts)
 }
 
-func deserializeCacheToResults(value []byte, out []outputValueHandler) ([]reflect.Value, time.Time, error) {
+func deserializeCacheToResults(value []byte, out []valueHandler) ([]reflect.Value, time.Time, error) {
 	parts, err := splitBytes(value)
 	if err != nil {
 		return nil, time.Time{}, err

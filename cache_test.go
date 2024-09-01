@@ -19,7 +19,7 @@ func typesForArgs(args []reflect.Value) []reflect.Type {
 }
 
 func Test_KeyForArgs_ContextFirstArgument(t *testing.T) {
-	r := &RedisCache{typeHandlers: map[reflect.Type]outputValueHandler{}}
+	r := &RedisCache{typeHandlers: map[reflect.Type]valueHandler{}}
 	args := []reflect.Value{reflect.ValueOf(context.Background()), reflect.ValueOf("arg1")}
 	returnTypes := "string"
 
@@ -46,7 +46,7 @@ func (t testKeyable) CacheKey() string {
 }
 
 func Test_KeyForArgs_KeyableArgument(t *testing.T) {
-	r := &RedisCache{typeHandlers: map[reflect.Type]outputValueHandler{}}
+	r := &RedisCache{typeHandlers: map[reflect.Type]valueHandler{}}
 	keyable := testKeyable{Value: "keyableValue"}
 	args := []reflect.Value{reflect.ValueOf(keyable)}
 	returnTypes := "string"
@@ -58,7 +58,7 @@ func Test_KeyForArgs_KeyableArgument(t *testing.T) {
 }
 
 func Test_KeyForArgs_StringArgument(t *testing.T) {
-	r := &RedisCache{typeHandlers: map[reflect.Type]outputValueHandler{}}
+	r := &RedisCache{typeHandlers: map[reflect.Type]valueHandler{}}
 	args := []reflect.Value{reflect.ValueOf("stringValue")}
 	returnTypes := "string"
 
@@ -69,7 +69,7 @@ func Test_KeyForArgs_StringArgument(t *testing.T) {
 }
 
 func Test_KeyForArgs_InvalidArgumentType(t *testing.T) {
-	r := &RedisCache{typeHandlers: map[reflect.Type]outputValueHandler{}}
+	r := &RedisCache{typeHandlers: map[reflect.Type]valueHandler{}}
 	args := []reflect.Value{reflect.ValueOf(123)}
 	returnTypes := "string"
 
@@ -80,7 +80,7 @@ func Test_KeyForArgs_InvalidArgumentType(t *testing.T) {
 }
 
 func Test_KeyForArgs_MultipleArguments(t *testing.T) {
-	r := &RedisCache{typeHandlers: map[reflect.Type]outputValueHandler{}}
+	r := &RedisCache{typeHandlers: map[reflect.Type]valueHandler{}}
 	args := []reflect.Value{reflect.ValueOf("arg1"), reflect.ValueOf("arg2")}
 	returnTypes := "string"
 

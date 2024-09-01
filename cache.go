@@ -40,7 +40,7 @@ type cacheFunctionConfig struct {
 	inputValueHandlers []inputValueHandler
 
 	// outputValueHandlers are handlers used to serialize and deserialize the function's output values.
-	outputValueHandlers []outputValueHandler
+	outputValueHandlers []valueHandler
 
 	// realFunction is the original function that is being wrapped with caching logic.
 	realFunction reflect.Value
@@ -522,48 +522,58 @@ func (r *RedisCache) makeInputValueHandlers(inputs []reflect.Type) []inputValueH
 			result[i] = inputValueHandler{serializer: func(a any) ([]byte, error) {
 				return []byte(a.(string)), nil
 			}}
-		case r.typeHandlers != nil:
+		default:
 			if handler, found := r.typeHandlers[typ]; found {
 				if handler.serializer == nil {
 					panic("serializer is required for custom types")
 				}
 				result[i] = inputValueHandler{
-					serializer: func(a any) ([]byte, error) {
-						return handler.serializer(a)
-					},
+					serializer: handler.serializer,
+				}
+				continue
+			}
+			for interfaceType, handler := range r.interfaceHandlers {
+				if typ.Implements(interfaceType) {
+					if handler.serializer == nil {
+						panic("serializer is required for custom types")
+					}
+					result[i] = inputValueHandler{
+						serializer: handler.serializer,
+					}
+					break
 				}
 			}
-
-		default:
-			result[i] = inputValueHandler{
-				serializer: func(a any) ([]byte, error) {
-					buf := new(bytes.Buffer)
-					err := binary.Write(buf, binary.LittleEndian, a)
-					if err != nil {
-						return nil, err
-					}
-					return buf.Bytes(), nil
-				},
+			if result[i].serializer == nil {
+				result[i] = inputValueHandler{
+					serializer: func(a any) ([]byte, error) {
+						buf := new(bytes.Buffer)
+						err := binary.Write(buf, binary.LittleEndian, a)
+						if err != nil {
+							return nil, err
+						}
+						return buf.Bytes(), nil
+					},
+				}
 			}
 		}
 	}
 	return result
 }
 
-func (r *RedisCache) makeOutputValueHandlers(out []reflect.Type) []outputValueHandler {
+func (r *RedisCache) makeOutputValueHandlers(out []reflect.Type) []valueHandler {
 	// The function should return 1 or more serializable types, and an optional error type.
 	// For the serializable types, also make a new instance of each type to allow for serialization.
 	if len(out) == 0 {
 		panic("f should return at least 1 value")
 	}
-	serializables := make([]outputValueHandler, len(out))
+	serializables := make([]valueHandler, len(out))
 	errorCount := 0
 	for i := 0; i < len(out); i++ {
 		typ := out[i]
 		switch {
 		case typ.Implements(serializableType):
 			obj := reflect.New(typ).Interface().(Serializable)
-			serializableHandler := outputValueHandler{
+			serializableHandler := valueHandler{
 				typ:          typ,
 				serializer:   func(o any) ([]byte, error) { return o.(Serializable).Serialize() },
 				deserializer: func(_ reflect.Type, data []byte) (any, error) { return obj.Deserialize(data) },
@@ -571,7 +581,7 @@ func (r *RedisCache) makeOutputValueHandlers(out []reflect.Type) []outputValueHa
 			serializables[i] = serializableHandler
 			continue
 		case typ == stringType:
-			serializables[i] = outputValueHandler{
+			serializables[i] = valueHandler{
 				typ:          typ,
 				serializer:   func(o any) ([]byte, error) { return []byte(o.(string)), nil },
 				deserializer: func(_ reflect.Type, data []byte) (any, error) { return string(data), nil },
@@ -582,13 +592,13 @@ func (r *RedisCache) makeOutputValueHandlers(out []reflect.Type) []outputValueHa
 			if errorCount > 1 {
 				panic("f should return at most 1 error")
 			}
-			serializables[i] = outputValueHandler{
+			serializables[i] = valueHandler{
 				typ:          typ,
 				serializer:   func(o any) ([]byte, error) { return nil, nil },
 				deserializer: func(_ reflect.Type, data []byte) (any, error) { return reflect.Zero(errorType), nil },
 			}
 			continue
-		case r.typeHandlers != nil:
+		default:
 			if handler, ok := r.typeHandlers[typ]; ok {
 				if handler.serializer == nil {
 					panic("serializer is required for custom types")
@@ -599,8 +609,26 @@ func (r *RedisCache) makeOutputValueHandlers(out []reflect.Type) []outputValueHa
 				serializables[i] = handler
 				continue
 			}
+			for interfaceType, handler := range r.interfaceHandlers {
+				if typ.Implements(interfaceType) {
+					if handler.serializer == nil {
+						panic("serializer is required for custom types")
+					}
+					if handler.deserializer == nil {
+						panic("deserializer is required for custom types")
+					}
+					serializables[i] = valueHandler{
+						typ:          typ,
+						serializer:   handler.serializer,
+						deserializer: handler.deserializer,
+					}
+					break
+				}
+			}
+			if serializables[i].typ == nil {
+				panic("invalid return type")
+			}
 		}
-		panic("invalid return type")
 	}
 	return serializables
 }

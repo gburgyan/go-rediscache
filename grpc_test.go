@@ -1,6 +1,5 @@
 package rediscache
 
-/*
 import (
 	"context"
 	"github.com/go-redis/redis/v8"
@@ -75,7 +74,7 @@ func Test_GRPC_RoundTrip(t *testing.T) {
 		now:               func() time.Time { return now },
 	})
 
-	c.RegisterTypeHandler(reflect.TypeOf(address), GRPCSerializer, GRPCDeserializer)
+	c.RegisterInterfaceHandler(reflect.TypeOf((*proto.Message)(nil)).Elem(), GRPCSerializer, GRPCDeserializer)
 
 	callCount := 0
 
@@ -112,5 +111,3 @@ func Test_GRPC_RoundTrip(t *testing.T) {
 
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
-
-*/

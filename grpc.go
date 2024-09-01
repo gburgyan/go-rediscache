@@ -1,6 +1,5 @@
 package rediscache
 
-/*
 import (
 	"errors"
 	"google.golang.org/protobuf/proto"
@@ -28,4 +27,3 @@ func GRPCDeserializer(typ reflect.Type, data []byte) (any, error) {
 	}
 	return msg, nil
 }
-*/

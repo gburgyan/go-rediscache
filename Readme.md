@@ -66,6 +66,7 @@ Input parameters must be or implement one of these types:
 * `string`
 * `Keyable`
 * Registered with `RegisterTypeHandler`
+* Registered with `RegisterInterfaceHandler`
 * Able to be written with `binary.Write` 
 
 The `Keyable` is defined by the library:
@@ -95,6 +96,7 @@ The results of a function may only be:
   * Results of function calls that return a non-`nil` error are not cached
 * `Serializable`
 * Registered with `RegisterTypeHandler`
+* Registered with `RegisterInterfaceHandler`
 
 In whatever way the serialization and deserialization happen, an object that is serialized the deserialized from the cached `[]byte` should remain semantically identical to the originally returned object.
 
@@ -241,11 +243,13 @@ func GRPCDeserializer(typ reflect.Type, data []byte) (any, error) {
 }
 ```
 
-You also need to register the types that are used:
+You also need to register the `proto.Message` interface using the `RegisterInterfaceHandler`:
 
 ```go
-cache.RegisterTypeHandler(reflect.TypeOf((*grpcMessageType)(nil)), GRPCSerializer, GRPCDeserializer)
+cache.RegisterInterfaceHandler(reflect.TypeOf((*proto.Message)(nil)).Elem(), GRPCSerializer, GRPCDeserializer)
 ```
+
+This enables everything that conforms to the gRPC message interface to be serialized and deserialized using these functions.
 
 ## Encryption and Security
 

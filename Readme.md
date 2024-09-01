@@ -211,6 +211,42 @@ In this case, the entire cache workflow took 23.708µs, the result was found in 
 
 The default key looks like `redis-cache:` and the return types of the cached function. If you want to use a different key, you can set that in the `CustomTimingName` field of the options. Note that the `CustomTimingName` does _not_ inherit so there is no chance that setting this at the overall cache level will affect the real calls. 
 
+## gRPC Support
+
+Supporting gRPC messages for both parameters and responses is easy. The only reason it's not in the package by default is that I didn't want to needlessly expand the dependencies of the package.
+
+Here are working serializers and deserializers for any gRPC message:
+
+```go
+// GRPCSerializer serializes a protobuf message to a byte slice.
+func GRPCSerializer(data any) ([]byte, error) {
+	msg, ok := data.(proto.Message)
+	if !ok {
+		return nil, errors.New("data does not implement proto.Message")
+	}
+	return proto.Marshal(msg)
+}
+
+// GRPCDeserializer deserializes a byte slice to a protobuf message.
+func GRPCDeserializer(typ reflect.Type, data []byte) (any, error) {
+	msg, ok := reflect.New(typ.Elem()).Interface().(proto.Message)
+	if !ok {
+		return nil, errors.New("type does not implement proto.Message")
+	}
+	err := proto.Unmarshal(data, msg)
+	if err != nil {
+		return nil, err
+	}
+	return msg, nil
+}
+```
+
+You also need to register the types that are used:
+
+```go
+cache.RegisterTypeHandler(reflect.TypeOf((*grpcMessageType)(nil)), GRPCSerializer, GRPCDeserializer)
+```
+
 ## Encryption and Security
 
 Since the cache values are stored in Redis, which depending on how things are set up in your environment, there are cases where having the values encrypted is a needed feature.

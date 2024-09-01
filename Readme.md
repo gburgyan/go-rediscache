@@ -108,6 +108,8 @@ In whatever way the serialization and deserialization happen, an object that is 
 
 To register a custom type handler, use the `RegisterTypeHandler` method. This method takes the type, a serializer function, and a deserializer function.
 
+If the type is an interface, then any object that implements that interface will match and use the provided serializer and deserializer.
+
 **Example:**
 
 ```go
@@ -137,49 +139,6 @@ func myTypeDeserializer(typ reflect.Type, data []byte) (any, error) {
 
 // Register the custom type handler
 cache.RegisterTypeHandler(reflect.TypeOf(MyType{}), myTypeSerializer, myTypeDeserializer)
-```
-
-#### Registering a Custom Interface Handler
-
-To register a custom interface handler, use the `RegisterInterfaceHandler` method. This method takes the interface type, a serializer function, and a deserializer function. Any type that implements the interface type that is registered will use the serializer and deserializer that is specified.
-
-**Example:**
-
-```go
-// Define a custom interface
-type MyInterface interface {
-    DoSomething() string
-}
-
-// Define a struct that implements MyInterface
-type MyStruct struct {
-    Value string
-}
-
-func (m MyStruct) DoSomething() string {
-    return m.Value
-}
-
-// Define a serializer for MyInterface
-func myInterfaceSerializer(data any) ([]byte, error) {
-    myInterface, ok := data.(MyInterface)
-    if !ok {
-        return nil, errors.New("data does not match MyInterface")
-    }
-    return json.Marshal(myInterface.DoSomething())
-}
-
-// Define a deserializer for MyInterface
-func myInterfaceDeserializer(typ reflect.Type, data []byte) (any, error) {
-    var value string
-    if err := json.Unmarshal(data, &value); err != nil {
-        return nil, err
-    }
-    return MyStruct{Value: value}, nil
-}
-
-// Register the custom interface handler
-cache.RegisterInterfaceHandler(reflect.TypeOf((*MyInterface)(nil)).Elem(), myInterfaceSerializer, myInterfaceDeserializer)
 ```
 
 ### Pointers

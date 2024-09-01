@@ -192,50 +192,27 @@ func NewRedisCache(ctx context.Context, client *redis.Client, opts CacheOptions)
 }
 
 // RegisterTypeHandler registers a custom serializer and deserializer for a specific type.
-// This allows the RedisCache to handle serialization and deserialization of custom types.
 //
 // Parameters:
 //
-//	typ (reflect.Type): The type for which the custom serializer and deserializer are being registered.
-//	ser (Serializer): A function that takes an instance of the type and returns its serialized byte representation.
-//	des (Deserializer): A function that takes a byte slice and returns an instance of the type.
+//	typ (reflect.Type): The type for which the handler is being registered.
+//	ser (Serializer): The function used to serialize instances of the type.
+//	des (Deserializer): The function used to deserialize byte slices into instances of the type.
 //
-// Example usage:
-//
-//	cache.RegisterTypeHandler(reflect.TypeOf(MyType{}), myTypeSerializer, myTypeDeserializer)
-//
-// This function is useful when you have custom types that need special handling for caching in Redis.
+// If the type is an interface, the handler is registered in the interfaceHandlers map.
+// Otherwise, it is registered in the typeHandlers map.
 func (r *RedisCache) RegisterTypeHandler(typ reflect.Type, ser Serializer, des Deserializer) {
-	r.typeHandlers[typ] = valueHandler{
-		typ:          typ,
-		serializer:   ser,
-		deserializer: des,
-	}
-}
-
-// RegisterInterfaceHandler registers a custom serializer and deserializer for a specific interface type.
-// This allows the RedisCache to handle serialization and deserialization of custom interface types.
-//
-// Parameters:
-// - typ: The interface type for which the custom serializer and deserializer are being registered. Must be an interface.
-// - ser: A function that takes an instance of the interface type and returns its serialized byte representation.
-// - des: A function that takes a byte slice and returns an instance of the interface type.
-//
-// Panics:
-// - If the provided type is not an interface.
-//
-// Example usage:
-//
-//	cache.RegisterInterfaceHandler(reflect.TypeOf((*MyInterface)(nil)).Elem(), myInterfaceSerializer, myInterfaceDeserializer)
-func (r *RedisCache) RegisterInterfaceHandler(typ reflect.Type, ser Serializer, des Deserializer) {
-	// Validate this is an interface
-	if typ.Kind() != reflect.Interface {
-		panic("RegisterInterfaceHandler: type is not an interface")
-	}
-
-	r.interfaceHandlers[typ] = valueHandler{
-		typ:          typ,
-		serializer:   ser,
-		deserializer: des,
+	if typ.Kind() == reflect.Interface {
+		r.interfaceHandlers[typ] = valueHandler{
+			typ:          typ,
+			serializer:   ser,
+			deserializer: des,
+		}
+	} else {
+		r.typeHandlers[typ] = valueHandler{
+			typ:          typ,
+			serializer:   ser,
+			deserializer: des,
+		}
 	}
 }

@@ -99,7 +99,7 @@ func Test_KeyForArgs_InterfaceArgument(t *testing.T) {
 		interfaceHandlers: make(map[reflect.Type]valueHandler),
 	}
 
-	r.RegisterInterfaceHandler(reflect.TypeOf((*testInterface)(nil)).Elem(), func(i interface{}) ([]byte, error) {
+	r.RegisterTypeHandler(reflect.TypeOf((*testInterface)(nil)).Elem(), func(i interface{}) ([]byte, error) {
 		return []byte(i.(testInterface).NovelFunction()), nil
 	}, func(typ reflect.Type, bytes []byte) (interface{}, error) {
 		return testStruct{Value: string(bytes)}, nil

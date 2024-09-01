@@ -79,6 +79,42 @@ func Test_KeyForArgs_InvalidArgumentType(t *testing.T) {
 	})
 }
 
+type testInterface interface {
+	NovelFunction() string
+}
+
+type testStruct struct {
+	Value string
+}
+
+func (t testStruct) NovelFunction() string {
+	return t.Value
+}
+
+func Test_KeyForArgs_InterfaceArgument(t *testing.T) {
+	args := []reflect.Value{reflect.ValueOf(testStruct{Value: "interfaceValue"})}
+	returnTypes := "string"
+
+	r := &RedisCache{
+		interfaceHandlers: make(map[reflect.Type]valueHandler),
+	}
+
+	r.RegisterInterfaceHandler(reflect.TypeOf((*testInterface)(nil)).Elem(), func(i interface{}) ([]byte, error) {
+		return []byte(i.(testInterface).NovelFunction()), nil
+	}, func(typ reflect.Type, bytes []byte) (interface{}, error) {
+		return testStruct{Value: string(bytes)}, nil
+	})
+
+	inputHandlers := r.makeInputValueHandlers(typesForArgs(args))
+	key := keyForArgs(inputHandlers, args, returnTypes)
+	assert.Equal(t, "interfaceValue/string", key)
+
+	outputHandlers := r.makeOutputValueHandlers(typesForArgs(args))
+	assert.NotNil(t, outputHandlers[0].serializer)
+	assert.NotNil(t, outputHandlers[0].deserializer)
+	assert.Equal(t, reflect.TypeOf(testStruct{}), outputHandlers[0].typ)
+}
+
 func Test_KeyForArgs_MultipleArguments(t *testing.T) {
 	r := &RedisCache{typeHandlers: map[reflect.Type]valueHandler{}}
 	args := []reflect.Value{reflect.ValueOf("arg1"), reflect.ValueOf("arg2")}

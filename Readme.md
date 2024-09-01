@@ -100,6 +100,88 @@ The results of a function may only be:
 
 In whatever way the serialization and deserialization happen, an object that is serialized the deserialized from the cached `[]byte` should remain semantically identical to the originally returned object.
 
+### Custom Type and Interface Handlers
+
+`go-rediscache` allows you to register custom serializers and deserializers for specific types and interfaces. This is useful when you have custom types or interfaces that need special handling for caching in Redis.
+
+#### Registering a Custom Type Handler
+
+To register a custom type handler, use the `RegisterTypeHandler` method. This method takes the type, a serializer function, and a deserializer function.
+
+**Example:**
+
+```go
+// Define a custom type
+type MyType struct {
+    Field1 string
+    Field2 int
+}
+
+// Define a serializer for MyType
+func myTypeSerializer(data any) ([]byte, error) {
+    myType, ok := data.(MyType)
+    if !ok {
+        return nil, errors.New("data does not match MyType")
+    }
+    return json.Marshal(myType)
+}
+
+// Define a deserializer for MyType
+func myTypeDeserializer(typ reflect.Type, data []byte) (any, error) {
+    var myType MyType
+    if err := json.Unmarshal(data, &myType); err != nil {
+        return nil, err
+    }
+    return myType, nil
+}
+
+// Register the custom type handler
+cache.RegisterTypeHandler(reflect.TypeOf(MyType{}), myTypeSerializer, myTypeDeserializer)
+```
+
+#### Registering a Custom Interface Handler
+
+To register a custom interface handler, use the `RegisterInterfaceHandler` method. This method takes the interface type, a serializer function, and a deserializer function. Any type that implements the interface type that is registered will use the serializer and deserializer that is specified.
+
+**Example:**
+
+```go
+// Define a custom interface
+type MyInterface interface {
+    DoSomething() string
+}
+
+// Define a struct that implements MyInterface
+type MyStruct struct {
+    Value string
+}
+
+func (m MyStruct) DoSomething() string {
+    return m.Value
+}
+
+// Define a serializer for MyInterface
+func myInterfaceSerializer(data any) ([]byte, error) {
+    myInterface, ok := data.(MyInterface)
+    if !ok {
+        return nil, errors.New("data does not match MyInterface")
+    }
+    return json.Marshal(myInterface.DoSomething())
+}
+
+// Define a deserializer for MyInterface
+func myInterfaceDeserializer(typ reflect.Type, data []byte) (any, error) {
+    var value string
+    if err := json.Unmarshal(data, &value); err != nil {
+        return nil, err
+    }
+    return MyStruct{Value: value}, nil
+}
+
+// Register the custom interface handler
+cache.RegisterInterfaceHandler(reflect.TypeOf((*MyInterface)(nil)).Elem(), myInterfaceSerializer, myInterfaceDeserializer)
+```
+
 ### Pointers
 
 There is no special handing of pointers in this package. There are default serializers for some common types, but there is no magic around pointers.

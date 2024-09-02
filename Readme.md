@@ -284,10 +284,10 @@ func GRPCDeserializer(typ reflect.Type, data []byte) (any, error) {
 }
 ```
 
-You also need to register the `proto.Message` interface using the `RegisterInterfaceHandler`:
+You also need to register the `proto.Message` interface using the `RegisterTypeHandler`:
 
 ```go
-cache.RegisterInterfaceHandler(reflect.TypeOf((*proto.Message)(nil)).Elem(), GRPCSerializer, GRPCDeserializer)
+cache.RegisterTypeHandler(reflect.TypeOf((*proto.Message)(nil)).Elem(), GRPCSerializer, GRPCDeserializer)
 ```
 
 This enables everything that conforms to the gRPC message interface to be serialized and deserialized using these functions.

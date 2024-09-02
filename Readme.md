@@ -1,3 +1,5 @@
+![Build status](https://github.com/gburgyan/go-rediscache/actions/workflows/go.yml/badge.svg) [![Go Report Card](https://goreportcard.com/badge/github.com/gburgyan/go-rediscache)](https://goreportcard.com/report/github.com/gburgyan/go-rediscache) [![PkgGoDev](https://pkg.go.dev/badge/github.com/gburgyan/go-rediscache)](https://pkg.go.dev/github.com/gburgyan/go-rediscache)
+
 # go-rediscache
 
 `go-rediscache` is a Go package designed to simplify the implementation of caching with Redis. It abstracts away the complexity of managing cache keys, handling concurrency, and ensuring consistency, allowing developers to focus on building reliable and performant applications. Whether you're working with expensive function calls, external API requests, or complex data processing, `go-rediscache` helps you avoid redundant operations and optimize resource usage.

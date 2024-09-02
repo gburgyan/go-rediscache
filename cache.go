@@ -296,7 +296,6 @@ func (cfc cacheFunctionConfig) cacher(args []reflect.Value) []reflect.Value {
 
 	// If found, return the value
 	if cachedValue != nil {
-		err = nil
 		cachedValue, err = handleDecryption(ctx, cfc.funcOpts, doTiming, cachedValue)
 
 		if err == nil {

@@ -283,12 +283,10 @@ func (cfc cacheFunctionConfig) cacher(args []reflect.Value) []reflect.Value {
 		ctx = cfc.cache.defaultContext
 	}
 
-	key := keyForArgs(cfc.inputValueHandlers, args, cfc.returnTypeKey)
-	hash := sha256.Sum256([]byte(key))
-	key = fmt.Sprintf("%s%x", cfc.funcOpts.KeyPrefix, hash)
+	key := cfc.keyForArgs(args)
 
 	// Look up key in cache
-	cachedValue, isLocked, err := cfc.cache.getCachedValueOrLock(ctx, key, cfc.funcOpts, doTiming)
+	cachedValue, lockStatus, err := cfc.cache.getCachedValueOrLock(ctx, key, cfc.funcOpts, doTiming, false)
 	if err != nil {
 		// If there was an error, call the main function and return the callResults
 		// and try to save the result to the cache in the background anyway.
@@ -360,7 +358,7 @@ func (cfc cacheFunctionConfig) cacher(args []reflect.Value) []reflect.Value {
 
 		if isError {
 			// unlock the cache
-			if isLocked {
+			if lockStatus == LockStatusLockAcquired {
 				err := cfc.cache.unlockCache(backgroundCtx, key)
 				if err != nil {
 				}
@@ -371,6 +369,13 @@ func (cfc cacheFunctionConfig) cacher(args []reflect.Value) []reflect.Value {
 
 	// Return the value
 	return callResults
+}
+
+func (cfc cacheFunctionConfig) keyForArgs(args []reflect.Value) string {
+	key := keyForArgs(cfc.inputValueHandlers, args, cfc.returnTypeKey)
+	hash := sha256.Sum256([]byte(key))
+	key = fmt.Sprintf("%s%x", cfc.funcOpts.KeyPrefix, hash)
+	return key
 }
 
 // handleBackgroundRefresh checks if the cache entry should be pre-refreshed based on the saved time.

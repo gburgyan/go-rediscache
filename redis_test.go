@@ -29,7 +29,7 @@ func Test_getCachedValueOrLock_CacheHit(t *testing.T) {
 
 	mock.ExpectGet(key).SetVal("valid-value")
 
-	value, locked, err := c.getCachedValueOrLock(ctx, key, c.opts, false)
+	value, locked, err := c.getCachedValueOrLock(ctx, key, c.opts, false, false)
 
 	assert.NoError(t, err)
 	assert.False(t, locked)

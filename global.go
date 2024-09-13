@@ -2,7 +2,10 @@ package rediscache
 
 import (
 	"context"
+	"errors"
+	"log"
 	"reflect"
+	"runtime"
 	"sync"
 )
 
@@ -49,6 +52,15 @@ func CacheBulk[IN any, OUT any](c *RedisCache, f CtxArgFunc[IN, OUT], funcOpts C
 			wg.Add(1)
 			i := i
 			go func(input IN) {
+				// Panic check
+				defer func() {
+					if r := recover(); r != nil {
+						stackTrace := make([]byte, 1<<16)
+						stackTrace = stackTrace[:runtime.Stack(stackTrace, true)]
+						log.Printf("Panic in function: %v\n%s", r, stackTrace)
+						results[i] = BulkReturn[OUT]{Error: errors.New("panic in function")}
+					}
+				}()
 				defer wg.Done()
 				result, err := cf(ctx, input)
 				results[i] = BulkReturn[OUT]{Result: result, Error: err}

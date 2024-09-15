@@ -349,7 +349,10 @@ func (cfc cacheFunctionConfig) cacher(args []reflect.Value) []reflect.Value {
 
 				if err == nil {
 					// Saving to the cache does an unlock implicitly.
-					cfc.cache.saveToCache(ctx, key, serialized, cfc.funcOpts)
+					err := cfc.cache.saveToCache(ctx, key, serialized, cfc.funcOpts)
+					if err != nil {
+						isError = true
+					}
 				} else {
 					isError = true
 				}
@@ -361,6 +364,7 @@ func (cfc cacheFunctionConfig) cacher(args []reflect.Value) []reflect.Value {
 			if lockStatus == LockStatusLockAcquired {
 				err := cfc.cache.unlockCache(backgroundCtx, key)
 				if err != nil {
+					log.Printf("Error unlocking cache: %v\n", err)
 				}
 			}
 			return
@@ -438,8 +442,8 @@ func (cfc cacheFunctionConfig) doBackgroundRefresh(ctx context.Context, key stri
 		return
 	}
 
-	// Save to the cache
-	cfc.cache.saveToCache(ctx, key, serialized, cfc.funcOpts)
+	// Save to the cache (we can ignore the error here)
+	_ = cfc.cache.saveToCache(ctx, key, serialized, cfc.funcOpts)
 }
 
 // shouldPreRefresh determines whether the cache entry should be pre-refreshed based on the saved time and cache options.

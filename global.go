@@ -104,7 +104,7 @@ func CacheBulkSlice[IN any, OUT any](c *RedisCache, f CtxSliceFunc[IN, OUT], fun
 		if len(cachedItems) == len(in) {
 			for i, item := range cachedItems {
 				toResults, _, err := deserializeCacheToResults(item.cachedValue, functionConfig.outputValueHandlers)
-				results[i] = BulkReturn[OUT]{Result: toResults[0].Interface(), Error: err}
+				results[i] = BulkReturn[OUT]{Result: toResults[0].Interface().(OUT), Error: err}
 			}
 			return results, nil
 		}
@@ -146,7 +146,7 @@ func CacheBulkSlice[IN any, OUT any](c *RedisCache, f CtxSliceFunc[IN, OUT], fun
 		// First, deal with the cached items
 		for _, item := range cachedItems {
 			toResults, _, err := deserializeCacheToResults(item.cachedValue, functionConfig.outputValueHandlers)
-			results[item.index] = BulkReturn[OUT]{Result: toResults[0].Interface(), Error: err}
+			results[item.index] = BulkReturn[OUT]{Result: toResults[0].Interface().(OUT), Error: err}
 		}
 
 		// Next, deal with the locked items -- do the parallel run of waiting for the lock to be released
@@ -154,7 +154,7 @@ func CacheBulkSlice[IN any, OUT any](c *RedisCache, f CtxSliceFunc[IN, OUT], fun
 			value, status, err := c.getCachedValueOrLock(ctx, item.key, funcOpts, doTiming, false)
 			if len(value) > 0 {
 				toResults, _, err := deserializeCacheToResults(value, functionConfig.outputValueHandlers)
-				return BulkReturn[OUT]{Result: toResults[0].Interface(), Error: err}, nil
+				return BulkReturn[OUT]{Result: toResults[0].Interface().(OUT), Error: err}, nil
 			}
 			// At this point we have a couple of possibilities:
 			// * The lock was acquired and the value was not in the cache, so we need to compute it

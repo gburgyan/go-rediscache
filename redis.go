@@ -3,6 +3,7 @@ package rediscache
 import (
 	"context"
 	"errors"
+	"fmt"
 	"github.com/gburgyan/go-timing"
 	"github.com/go-redis/redis/v8"
 	"time"
@@ -184,11 +185,12 @@ func (r *RedisCache) unlockCache(ctx context.Context, key string) error {
 //
 // Panics:
 // - If the operation to set the value in the cache fails.
-func (r *RedisCache) saveToCache(ctx context.Context, key string, value []byte, opts CacheOptions) {
+func (r *RedisCache) saveToCache(ctx context.Context, key string, value []byte, opts CacheOptions) error {
 	set := r.connection.Set(ctx, key, value, opts.TTL)
 	if set.Err() != nil {
-		panic(set.Err())
+		return fmt.Errorf("failed to save value to cache: %w", set.Err())
 	}
+	return nil
 }
 
 // lockRefresh attempts to acquire a lock for refreshing the cache entry.

@@ -2,11 +2,8 @@ package rediscache
 
 import (
 	"context"
-	"errors"
 	"log"
 	"reflect"
-	"runtime"
-	"sync"
 )
 
 // Cache wraps the provided function with caching logic using default cache options.
@@ -34,41 +31,26 @@ func CacheOpts[F any](c *RedisCache, f F, funcOpts CacheOptions) F {
 	return c.CachedOpts(f, funcOpts).(F)
 }
 
-type CtxArgFunc[I any, O any] func(ctx context.Context, in I) (O, error)
-type CtxSliceFunc[I any, O any] func(ctx context.Context, in []I) ([]O, error)
+type CtxArgFunc[IN any, OUT any] func(ctx context.Context, in IN) (OUT, error)
+type CtxSliceFunc[IN any, OUT any] func(ctx context.Context, in []IN) ([]OUT, error)
 
-type BulkReturn[O any] struct {
-	Result O
+type BulkReturn[OUT any] struct {
+	Result OUT
 	Error  error
 }
 
 func CacheBulk[IN any, OUT any](c *RedisCache, f CtxArgFunc[IN, OUT], funcOpts CacheOptions) func(ctx context.Context, in []IN) []BulkReturn[OUT] {
 	cf := CacheOpts(c, f, funcOpts)
 	return func(ctx context.Context, in []IN) []BulkReturn[OUT] {
-		results := make([]BulkReturn[OUT], len(in))
-		var wg sync.WaitGroup
-
-		for i, input := range in {
-			wg.Add(1)
-			i := i
-			go func(input IN) {
-				// Panic check
-				defer func() {
-					if r := recover(); r != nil {
-						stackTrace := make([]byte, 1<<16)
-						stackTrace = stackTrace[:runtime.Stack(stackTrace, true)]
-						log.Printf("Panic in function: %v\n%s", r, stackTrace)
-						results[i] = BulkReturn[OUT]{Error: errors.New("panic in function")}
-					}
-				}()
-				defer wg.Done()
-				result, err := cf(ctx, input)
-				results[i] = BulkReturn[OUT]{Result: result, Error: err}
-			}(input)
-		}
-		wg.Wait()
-		return results
+		return parallelRun(ctx, cf, in)
 	}
+}
+
+type keyStatus struct {
+	index       int
+	key         string
+	cachedValue []byte
+	status      LockStatus
 }
 
 func CacheBulkSlice[IN any, OUT any](c *RedisCache, f CtxSliceFunc[IN, OUT], funcOpts CacheOptions, refreshEntireBatch bool) func(ctx context.Context, in []IN) ([]BulkReturn[OUT], error) {
@@ -79,83 +61,143 @@ func CacheBulkSlice[IN any, OUT any](c *RedisCache, f CtxSliceFunc[IN, OUT], fun
 	functionConfig := c.setupCacheFunctionConfig(baseFunc, funcOpts)
 
 	return func(ctx context.Context, in []IN) ([]BulkReturn[OUT], error) {
-		keys := make([]string, len(in))
 		doTiming := funcOpts.EnableTiming
 
-		for i, input := range in {
-			keys[i] = functionConfig.keyForArgs([]reflect.Value{reflect.ValueOf(input)})
-		}
-
-		for i, key := range keys {
+		keyStatuses := parallelRun(ctx, func(ctx context.Context, input IN) (keyStatus, error) {
+			key := functionConfig.keyForArgs([]reflect.Value{reflect.ValueOf(input)})
 			value, locked, err := c.getCachedValueOrLock(ctx, key, funcOpts, doTiming, true)
+			return keyStatus{key: key, cachedValue: value, status: locked}, err
+		}, in)
 
+		items := make([]*keyStatus, len(in))
+		var cachedItems []*keyStatus
+		var uncachedItems []*keyStatus
+		var lockedItems []*keyStatus
+		var alreadyLockedItems []*keyStatus
+
+		for i, item := range keyStatuses {
+			status := item.Result
+			status.index = i
+			items[i] = &status
+			if item.Error != nil || status.status == LockStatusError {
+				uncachedItems = append(uncachedItems, &status)
+			} else if len(status.cachedValue) > 0 {
+				// This is a cached item and the lock status is unlocked
+				cachedItems = append(cachedItems, &status)
+			} else if status.status == LockStatusLockAcquired {
+				lockedItems = append(lockedItems, &status)
+			} else if status.status == LockStatusLockFailed {
+				alreadyLockedItems = append(alreadyLockedItems, &status)
+			} else {
+				panic("unexpected lock status")
+			}
 		}
 
-		values, err := c.getCachedValues(ctx, keys, doTiming)
-		if err == nil {
-			// Ignore this as we can call the function to get the results. Log it for debugging.
-		}
+		// At this point, we have three sets of items:
+		// 1. cachedItems: items that were found in the cache
+		// 2. uncachedItems: items that were not found in the cache, likely due to an error (otherwise they would be in lockedItems)
+		// 3. lockedItems: items that were locked and we have committed to refreshing
+		// 4. alreadyLockedItems: items that were already locked by another process and are being computed by that process
 
-		// Check to see if all the values are cached
-		uncachedIndexes := []int{}
-		lockedIndexes := []int{}
 		results := make([]BulkReturn[OUT], len(in))
-		allCached := true
-		for i, value := range values {
-			if value == nil {
-				allCached = false
-				uncachedIndexes = append(uncachedIndexes, i)
-				continue
+		// Simple case: everything is cached
+		if len(cachedItems) == len(in) {
+			for i, item := range cachedItems {
+				toResults, _, err := deserializeCacheToResults(item.cachedValue, functionConfig.outputValueHandlers)
+				results[i] = BulkReturn[OUT]{Result: toResults[0].Interface(), Error: err}
 			}
-			// Check if the value is locked
-			if len(value) == 0 {
-				lockedIndexes = append(lockedIndexes, i)
-				continue
-			}
-			cachedVals, _, err := deserializeCacheToResults(value, functionConfig.outputValueHandlers)
-			if err != nil {
-				allCached = false
-				uncachedIndexes = append(uncachedIndexes, i)
-				continue
-			}
-			results[i] = BulkReturn[OUT]{Result: cachedVals[0].Interface().(OUT), Error: nil}
-		}
-
-		if allCached {
 			return results, nil
 		}
 
-		// If we are not refreshing the entire batch, we need to call the function for the uncached values
-		var refreshArgs []IN
-		var refreshIndexes []int
-		var lockIndexes []int
-		if !refreshEntireBatch {
-			for _, i := range uncachedIndexes {
-				refreshArgs = append(refreshArgs, in[i])
-				refreshIndexes = append(refreshIndexes, i)
+		// Another simple case: If we are refreshing the entire batch, we can just refresh everything at this point.
+		if refreshEntireBatch {
+			outs, err := f(ctx, in)
+			if err != nil {
+				// Unlock everything that we locked
+				for _, item := range lockedItems {
+					err := c.unlockCache(ctx, item.key)
+					if err != nil {
+						log.Printf("Error unlocking cache: %v", err)
+					}
+				}
+				return nil, err
 			}
-			for _, i := range lockedIndexes {
-				lockIndexes = append(lockIndexes, i)
+			// Save all the results to the cache
+			for i, out := range outs {
+				key := functionConfig.keyForArgs([]reflect.Value{reflect.ValueOf(in[i])})
+				cacheVal, err := serializeResultsToCache(funcOpts, []reflect.Value{reflect.ValueOf(out)}, functionConfig.outputValueHandlers)
+				c.saveToCache(ctx, key, cacheVal, funcOpts)
+				if err != nil {
+					log.Printf("Error setting cache: %v", err)
+				}
+				results[i] = BulkReturn[OUT]{Result: out, Error: nil}
 			}
-		} else {
-			refreshArgs = in
-			for i := range in {
-				refreshIndexes = append(refreshIndexes, i)
-			}
+			// TODO: Deal with any locking issues
+			return results, nil
 		}
 
-		refreshResults, err := f(ctx, refreshArgs)
+		// Here is where the fun begins. We have several things to deal with:
+		// * For things that are cached, deserialize them
+		// * For things that are locked, wait for them to be unlocked and then deserialize them.
+		// * For things that are uncached, compute them and then save them to the cache. This has two sub-cases:
+		//   * If we were able to lock the item we are computing, we can save it to the cache.
+		//   * If we were not able to get the item or lock it (and it wasn't already locked) then we compute it and return it -- and no locking involved
 
-		for i, result := range refreshResults {
-			results[refreshIndexes[i]] = BulkReturn[OUT]{Result: result, Error: err}
-			if err == nil {
-				// Cache the results
-				serialized, err := serializeResultsToCache(funcOpts, []reflect.Value{reflect.ValueOf(result)}, functionConfig.outputValueHandlers)
+		// First, deal with the cached items
+		for _, item := range cachedItems {
+			toResults, _, err := deserializeCacheToResults(item.cachedValue, functionConfig.outputValueHandlers)
+			results[item.index] = BulkReturn[OUT]{Result: toResults[0].Interface(), Error: err}
+		}
+
+		// Next, deal with the locked items -- do the parallel run of waiting for the lock to be released
+		lockedResults := parallelRun(ctx, func(ctx context.Context, item *keyStatus) (BulkReturn[OUT], error) {
+			value, status, err := c.getCachedValueOrLock(ctx, item.key, funcOpts, doTiming, false)
+			if len(value) > 0 {
+				toResults, _, err := deserializeCacheToResults(value, functionConfig.outputValueHandlers)
+				return BulkReturn[OUT]{Result: toResults[0].Interface(), Error: err}, nil
+			}
+			// At this point we have a couple of possibilities:
+			// * The lock was acquired and the value was not in the cache, so we need to compute it
+			inSlice := []IN{in[item.index]}
+			singleResult, err := f(ctx, inSlice)
+			if err != nil {
+				// Save to cache
+				cacheVal, err := serializeResultsToCache(funcOpts, []reflect.Value{reflect.ValueOf(singleResult[0])}, functionConfig.outputValueHandlers)
 				if err != nil {
-					// Log this error
-					continue
+					log.Printf("Error serializing to cache: %v", err)
+					if status == LockStatusLockAcquired {
+						// Unlock the cache
+						err := c.unlockCache(ctx, item.key)
+						if err != nil {
+							log.Printf("Error unlocking cache: %v", err)
+						}
+					}
+					return BulkReturn[OUT]{Result: singleResult[0], Error: nil}, nil
 				}
-				c.saveToCache(ctx, keys[refreshIndexes[i]], serialized, funcOpts)
+				c.saveToCache(ctx, item.key, cacheVal, funcOpts)
+			}
+			return BulkReturn[OUT]{Result: singleResult[0], Error: err}, nil
+		}, lockedItems)
+		// Now deserialize the locked items
+		for i, item := range lockedItems {
+			results[item.index] = lockedResults[i].Result
+			results[item.index].Error = lockedResults[i].Error
+		}
+
+		// Now, deal with the uncached items. Since the function takes a slice, we can just pass the slice of uncached items to the function.
+		// Create a slice of the uncached items that we can pass to the function and call it.
+		uncachedInputs := make([]IN, len(uncachedItems))
+		for i, item := range uncachedItems {
+			uncachedInputs[i] = in[item.index]
+		}
+		uncachedResults, err := f(ctx, uncachedInputs)
+		for i, uncachedItem := range uncachedItems {
+			results[uncachedItem.index] = BulkReturn[OUT]{Result: uncachedResults[i], Error: err}
+			// Save the result to the cache
+			cacheVal, err := serializeResultsToCache(funcOpts, []reflect.Value{reflect.ValueOf(uncachedResults[i])}, functionConfig.outputValueHandlers)
+			c.saveToCache(ctx, uncachedItem.key, cacheVal, funcOpts)
+			if err != nil {
+				log.Printf("Error setting cache: %v", err)
 			}
 		}
 

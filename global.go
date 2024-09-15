@@ -126,9 +126,13 @@ func CacheBulkSlice[IN any, OUT any](c *RedisCache, f CtxSliceFunc[IN, OUT], fun
 			for i, out := range outs {
 				key := functionConfig.keyForArgs([]reflect.Value{reflect.ValueOf(in[i])})
 				cacheVal, err := serializeResultsToCache(funcOpts, []reflect.Value{reflect.ValueOf(out)}, functionConfig.outputValueHandlers)
-				c.saveToCache(ctx, key, cacheVal, funcOpts)
 				if err != nil {
-					log.Printf("Error setting cache: %v", err)
+					log.Printf("Error serializing value: %v", err)
+				} else {
+					err = c.saveToCache(ctx, key, cacheVal, funcOpts)
+					if err != nil {
+						log.Printf("Error setting cache: %v", err)
+					}
 				}
 				results[i] = BulkReturn[OUT]{Result: out, Error: nil}
 			}
@@ -174,7 +178,17 @@ func CacheBulkSlice[IN any, OUT any](c *RedisCache, f CtxSliceFunc[IN, OUT], fun
 					}
 					return BulkReturn[OUT]{Result: singleResult[0], Error: nil}, nil
 				}
-				c.saveToCache(ctx, item.key, cacheVal, funcOpts)
+				err = c.saveToCache(ctx, item.key, cacheVal, funcOpts)
+				if err != nil {
+					log.Printf("Error setting cache: %v", err)
+					if status == LockStatusLockAcquired {
+						// Unlock the cache
+						err := c.unlockCache(ctx, item.key)
+						if err != nil {
+							log.Printf("Error unlocking cache: %v", err)
+						}
+					}
+				}
 			}
 			return BulkReturn[OUT]{Result: singleResult[0], Error: err}, nil
 		}, lockedItems)
@@ -195,9 +209,20 @@ func CacheBulkSlice[IN any, OUT any](c *RedisCache, f CtxSliceFunc[IN, OUT], fun
 			results[uncachedItem.index] = BulkReturn[OUT]{Result: uncachedResults[i], Error: err}
 			// Save the result to the cache
 			cacheVal, err := serializeResultsToCache(funcOpts, []reflect.Value{reflect.ValueOf(uncachedResults[i])}, functionConfig.outputValueHandlers)
-			c.saveToCache(ctx, uncachedItem.key, cacheVal, funcOpts)
 			if err != nil {
 				log.Printf("Error setting cache: %v", err)
+			} else {
+				err = c.saveToCache(ctx, uncachedItem.key, cacheVal, funcOpts)
+				if err != nil {
+					log.Printf("Error setting cache: %v", err)
+					if uncachedItem.status == LockStatusLockAcquired {
+						// Unlock the cache
+						err := c.unlockCache(ctx, uncachedItem.key)
+						if err != nil {
+							log.Printf("Error unlocking cache: %v", err)
+						}
+					}
+				}
 			}
 		}
 

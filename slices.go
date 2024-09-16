@@ -157,6 +157,7 @@ func handleUncachedItems[IN any, OUT any](ctx context.Context, in []IN, uncached
 		cacheVal, err := serializeResultsToCache(funcOpts, []reflect.Value{reflect.ValueOf(uncachedResults[i])}, functionConfig.outputValueHandlers)
 		if err != nil {
 			log.Printf("Error setting cache: %v", err)
+			unlockIfNeeded(ctx, uncachedItem, uncachedItem.status, c)
 		} else {
 			err = c.saveToCache(ctx, uncachedItem.key, cacheVal, funcOpts)
 			if err != nil {
@@ -184,12 +185,12 @@ func handleLockedItems[IN any, OUT any](ctx context.Context, in []IN, c *RedisCa
 			if err != nil {
 				log.Printf("Error serializing to cache: %v", err)
 				unlockIfNeeded(ctx, item, status, c)
-				return BulkReturn[OUT]{Result: singleResult[0], Error: nil}, nil
-			}
-			err = c.saveToCache(ctx, item.key, cacheVal, funcOpts)
-			if err != nil {
-				log.Printf("Error setting cache: %v", err)
-				unlockIfNeeded(ctx, item, status, c)
+			} else {
+				err = c.saveToCache(ctx, item.key, cacheVal, funcOpts)
+				if err != nil {
+					log.Printf("Error setting cache: %v", err)
+					unlockIfNeeded(ctx, item, status, c)
+				}
 			}
 		}
 		return BulkReturn[OUT]{Result: singleResult[0], Error: err}, nil

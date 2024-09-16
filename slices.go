@@ -41,12 +41,13 @@ func CacheBulkSlice[IN any, OUT any](c *RedisCache, f CtxSliceFunc[IN, OUT], fun
 			return keyStatus{key: key, cachedValue: value, status: locked}, err
 		}, in)
 
-		var cachedItems, uncachedItems, lockedItems, alreadyLockedItems []*keyStatus
+		var items, cachedItems, uncachedItems, lockedItems, alreadyLockedItems []*keyStatus
 		results := make([]BulkReturn[OUT], len(in))
 
 		for i, item := range keyStatuses {
 			status := item.Result
 			status.index = i
+			items = append(items, &status)
 			switch {
 			case item.Error != nil || status.status == LockStatusError:
 				uncachedItems = append(uncachedItems, &status)
@@ -67,7 +68,7 @@ func CacheBulkSlice[IN any, OUT any](c *RedisCache, f CtxSliceFunc[IN, OUT], fun
 		}
 
 		if refreshEntireBatch {
-			if err := refreshAllInBatch(ctx, in, f, lockedItems, c, functionConfig, funcOpts, results); err != nil {
+			if err := refreshAllInBatch(ctx, in, f, items, c, functionConfig, funcOpts, results); err != nil {
 				return nil, err
 			}
 			return results, nil

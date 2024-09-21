@@ -7,7 +7,7 @@ import (
 	"sync"
 )
 
-func parallelRun[IN any, OUT any](ctx context.Context, f func(context.Context, IN) (OUT, error), in []IN) []BulkReturn[OUT] {
+func parallelRun[IN any, OUT any](ctx context.Context, in []IN, f func(context.Context, IN) (OUT, error)) []BulkReturn[OUT] {
 	results := make([]BulkReturn[OUT], len(in))
 	var wg sync.WaitGroup
 

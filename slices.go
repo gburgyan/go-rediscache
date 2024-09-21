@@ -2,6 +2,7 @@ package rediscache
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"reflect"
 	"sync"
@@ -148,6 +149,9 @@ func refreshAllInBatch[IN any, OUT any](ctx context.Context, f CtxSliceFunc[IN, 
 	}
 
 	outs, err := f(ctx, in)
+	if len(outs) != len(items) {
+		err = fmt.Errorf("expected %d results, got %d", len(items), len(outs))
+	}
 	if err != nil {
 		// Unlock everything that we locked
 		for _, item := range items {
@@ -190,6 +194,13 @@ func handleUncachedItems[IN any, OUT any](ctx context.Context, uncachedItems []*
 		uncachedInputs[i] = item.input
 	}
 	uncachedResults, err := f(ctx, uncachedInputs)
+	if len(uncachedResults) != len(uncachedInputs) {
+		err = fmt.Errorf("expected %d results, got %d", len(uncachedInputs), len(uncachedResults))
+		for _, item := range uncachedItems {
+			item.resultErr = err
+		}
+		return
+	}
 	for i, uncachedItem := range uncachedItems {
 		uncachedItem.resultVal = uncachedResults[i]
 		uncachedItem.resultErr = err
@@ -221,6 +232,9 @@ func handleLockedItems[IN any, OUT any](ctx context.Context, funcOpts CacheOptio
 		// * The lock was acquired and the value was not in the cache, so we need to compute it
 		inSlice := []IN{item.input}
 		singleResult, err := f(ctx, inSlice)
+		if len(singleResult) != 1 {
+			err = fmt.Errorf("expected 1 result, got %d", len(singleResult))
+		}
 		if err != nil {
 			// Save to cache
 			cacheVal, err := serializeResultsToCache(funcOpts, []reflect.Value{reflect.ValueOf(singleResult[0])}, functionConfig.outputValueHandlers)

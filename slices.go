@@ -114,9 +114,7 @@ func CacheBulkSliceOpts[IN any, OUT any](c *RedisCache, f CtxSliceFunc[IN, OUT],
 
 		// If all items are cached, deserialize and return results
 		if len(cachedItems) == len(in) {
-			var deserializeComplete timing.Complete
 			if doTiming {
-				_, deserializeComplete = timing.Start(ctx, "DeserializeAllCachedResults")
 				timingCtx.AddDetails("all-hit", true)
 				timingCtx.AddDetails("miss", len(alreadyLocked))
 				timingCtx.AddDetails("hit", len(cachedItems))
@@ -124,11 +122,8 @@ func CacheBulkSliceOpts[IN any, OUT any](c *RedisCache, f CtxSliceFunc[IN, OUT],
 				timingCtx.AddDetails("miss", len(lockedItems))
 			}
 
-			deserializeAllCachedResults(cachedItems, functionConfig)
+			handleCachedItems(ctx, cachedItems, functionConfig, funcOpts)
 
-			if doTiming {
-				deserializeComplete()
-			}
 			return composeResults(cachedItems)
 		}
 
@@ -216,14 +211,6 @@ func composeResults[IN, OUT any](items []*keyStatus[IN, OUT]) ([]BulkReturn[OUT]
 		results[item.index] = BulkReturn[OUT]{Result: item.resultVal, Error: item.resultErr}
 	}
 	return results, nil
-}
-
-func deserializeAllCachedResults[IN any, OUT any](cachedItems []*keyStatus[IN, OUT], functionConfig cacheFunctionConfig) {
-	for _, item := range cachedItems {
-		toResults, _, err := deserializeCacheToResults(item.cachedValue, functionConfig.outputValueHandlers)
-		item.resultVal = toResults[0].Interface().(OUT)
-		item.resultErr = err
-	}
 }
 
 func handleUncachedItems[IN any, OUT any](ctx context.Context, uncachedItems []*keyStatus[IN, OUT], f CtxSliceFunc[IN, OUT], funcOpts CacheOptions, functionConfig cacheFunctionConfig) {
@@ -375,6 +362,7 @@ func handleCachedItems[IN, OUT any](ctx context.Context, cachedItems []*keyStatu
 	for _, item := range cachedItems {
 		// Deserialize the cached value into results
 		toResults, _, err := deserializeCacheToResults(item.cachedValue, functionConfig.outputValueHandlers)
+		// TODO: Use the returned time to determine if the cache should be refreshed
 		item.resultVal = toResults[0].Interface().(OUT)
 		item.resultErr = err
 	}

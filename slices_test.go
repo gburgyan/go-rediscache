@@ -33,6 +33,7 @@ func TestSliceReal(t *testing.T) {
 		LockRetry:    time.Millisecond * 200,
 		KeyPrefix:    "GoCache-",
 		EnableTiming: true,
+		now:          time.Now,
 	})
 	c.RegisterTypeHandler(sliceResultsType, JsonSerializer, JsonDeserializer)
 
@@ -51,14 +52,15 @@ func TestSliceReal(t *testing.T) {
 		LockRetry:    time.Millisecond * 200,
 		KeyPrefix:    "GoCache-",
 		EnableTiming: true,
+		now:          time.Now,
 	})
 
-	s, err := cf(timingCtx, []string{"test"})
+	s, err := cf(timingCtx, []string{"test1", "test2", "test3", "test4"})
 
 	time.Sleep(time.Millisecond * 500)
 
 	assert.NoError(t, err)
-	assert.Equal(t, "processed:test", s[0].Result.Value)
+	assert.Equal(t, "processed:test1", s[0].Result.Value)
 
 	fmt.Println(timingCtx.String())
 }

@@ -52,7 +52,7 @@ type keyStatus[IN any, OUT any] struct {
 // - func(ctx context.Context, in []IN) ([]BulkReturn[OUT], error) - A function that processes the input slice and returns the results.
 func CacheBulkSlice[IN any, OUT any](c *RedisCache, f CtxSliceFunc[IN, OUT], funcOpts CacheOptions) func(ctx context.Context, in []IN) ([]BulkReturn[OUT], error) {
 	// Setup the cache function configuration
-	functionConfig := c.setupCacheFunctionConfig(func(IN) (OUT, error) { panic("not to be called") }, funcOpts)
+	functionConfig := c.setupCacheFunctionConfig(func(IN) OUT { panic("not to be called") }, funcOpts)
 
 	return func(ctx context.Context, in []IN) ([]BulkReturn[OUT], error) {
 		doTiming := funcOpts.EnableTiming
@@ -66,12 +66,15 @@ func CacheBulkSlice[IN any, OUT any](c *RedisCache, f CtxSliceFunc[IN, OUT], fun
 		}
 
 		var initialLockComplete timing.Complete
+		initialLockCtx := ctx
 		if doTiming {
-			_, initialLockComplete = timing.Start(ctx, "InitialLock")
+			var initialLockTimingCtx *timing.Context
+			initialLockTimingCtx, initialLockComplete = timing.Start(ctx, "InitialLock")
+			initialLockCtx = initialLockTimingCtx
 		}
 
 		// Run the parallel function to get key statuses
-		keyStatuses := parallelRun(ctx, in, func(ctx context.Context, input IN) (keyStatus[IN, OUT], error) {
+		keyStatuses := parallelRun(initialLockCtx, in, func(ctx context.Context, input IN) (keyStatus[IN, OUT], error) {
 			key := functionConfig.keyForArgs([]reflect.Value{reflect.ValueOf(input)})
 			value, locked, err := c.getCachedValueOrLock(ctx, key, funcOpts, doTiming, true)
 			return keyStatus[IN, OUT]{key: key, cachedValue: value, status: locked, input: input}, err
@@ -196,7 +199,7 @@ func CacheBulkSlice[IN any, OUT any](c *RedisCache, f CtxSliceFunc[IN, OUT], fun
 					lockedTimingCtx, lockedWaitingTiming = timing.Start(ctx, "LockedWaiting")
 					lockedCtx = lockedTimingCtx
 				}
-				handleLockedItems(lockedCtx, funcOpts, doTiming, functionConfig, f, alreadyLocked)
+				handleAlreadyLockedItems(lockedCtx, funcOpts, doTiming, functionConfig, f, alreadyLocked)
 				if doTiming {
 					lockedWaitingTiming()
 				}
@@ -303,22 +306,26 @@ func handleUncachedItems[IN any, OUT any](ctx context.Context, uncachedItems []*
 		uncachedItem.resultVal = uncachedResults[i]
 		uncachedItem.resultErr = err
 
-		// Save the result to the cache
-		cacheVal, err := serializeResultsToCache(funcOpts, []reflect.Value{reflect.ValueOf(uncachedItem.resultVal)}, functionConfig.outputValueHandlers)
-		if err != nil {
-			log.Printf("Error setting cache: %v", err)
-			unlockIfNeeded(ctx, functionConfig.cache, uncachedItem)
-		} else {
-			err = functionConfig.cache.saveToCache(ctx, uncachedItem.key, cacheVal, funcOpts)
+		if err == nil {
+			// Save the result to the cache
+			cacheVal, err := serializeResultsToCache(funcOpts, []reflect.Value{reflect.ValueOf(uncachedItem.resultVal)}, functionConfig.outputValueHandlers)
 			if err != nil {
 				log.Printf("Error setting cache: %v", err)
 				unlockIfNeeded(ctx, functionConfig.cache, uncachedItem)
+			} else {
+				err = functionConfig.cache.saveToCache(ctx, uncachedItem.key, cacheVal, funcOpts)
+				if err != nil {
+					log.Printf("Error setting cache: %v", err)
+					unlockIfNeeded(ctx, functionConfig.cache, uncachedItem)
+				}
 			}
+		} else {
+			unlockIfNeeded(ctx, functionConfig.cache, uncachedItem)
 		}
 	}
 }
 
-func handleLockedItems[IN any, OUT any](ctx context.Context, funcOpts CacheOptions, doTiming bool, functionConfig cacheFunctionConfig, f CtxSliceFunc[IN, OUT], lockedItems []*keyStatus[IN, OUT]) {
+func handleAlreadyLockedItems[IN any, OUT any](ctx context.Context, funcOpts CacheOptions, doTiming bool, functionConfig cacheFunctionConfig, f CtxSliceFunc[IN, OUT], lockedItems []*keyStatus[IN, OUT]) {
 	lockedResults := parallelRun(ctx, lockedItems, func(ctx context.Context, item *keyStatus[IN, OUT]) (BulkReturn[OUT], error) {
 		value, status, err := functionConfig.cache.getCachedValueOrLock(ctx, item.key, funcOpts, doTiming, false)
 		item.status = status
@@ -333,7 +340,7 @@ func handleLockedItems[IN any, OUT any](ctx context.Context, funcOpts CacheOptio
 		if len(singleResult) != 1 {
 			err = fmt.Errorf("expected 1 result, got %d", len(singleResult))
 		}
-		if err != nil {
+		if err == nil {
 			// Save to cache
 			cacheVal, err := serializeResultsToCache(funcOpts, []reflect.Value{reflect.ValueOf(singleResult[0])}, functionConfig.outputValueHandlers)
 			if err != nil {

@@ -134,18 +134,13 @@ func CacheBulkSliceOpts[IN any, OUT any](c *RedisCache, f CtxSliceFunc[IN, OUT],
 
 		// If refreshEntireBatch is true, refresh all items in batch
 		if funcOpts.RefreshEntireBatch {
-			var refreshComplete timing.Complete
 			if doTiming {
-				_, refreshComplete = timing.Start(ctx, "RefreshAllInBatch")
 				timingCtx.AddDetails("complete-refresh", true)
 				timingCtx.AddDetails("hit", len(cachedItems))
 				timingCtx.AddDetails("already-locked", len(alreadyLocked))
 				timingCtx.AddDetails("miss", len(lockedItems))
 			}
-			refreshAllInBatch(ctx, f, items, functionConfig, funcOpts)
-			if doTiming {
-				refreshComplete()
-			}
+			handleUncachedItems(ctx, items, f, funcOpts, functionConfig)
 			return composeResults(items)
 		}
 
@@ -221,59 +216,6 @@ func composeResults[IN, OUT any](items []*keyStatus[IN, OUT]) ([]BulkReturn[OUT]
 		results[item.index] = BulkReturn[OUT]{Result: item.resultVal, Error: item.resultErr}
 	}
 	return results, nil
-}
-
-func refreshAllInBatch[IN any, OUT any](ctx context.Context, f CtxSliceFunc[IN, OUT], items []*keyStatus[IN, OUT], functionConfig cacheFunctionConfig, funcOpts CacheOptions) {
-	in := make([]IN, len(items))
-	for i, item := range items {
-		in[i] = item.input
-	}
-
-	outs, err := f(ctx, in)
-	if len(outs) != len(items) {
-		err = fmt.Errorf("expected %d results, got %d", len(items), len(outs))
-	}
-	if err != nil {
-		// Unlock everything that we locked
-		for _, item := range items {
-			if item.status == LockStatusLockAcquired {
-				unlockIfNeeded(ctx, functionConfig.cache, item)
-			}
-			item.resultErr = err
-		}
-		return
-	}
-
-	for i, item := range items {
-		item.resultVal = outs[i]
-	}
-
-	go func() {
-		// Trap panics
-		defer func() {
-			if r := recover(); r != nil {
-				stackTrace := make([]byte, 1<<16)
-				stackTrace = stackTrace[:runtime.Stack(stackTrace, true)]
-				log.Printf("Panic saving cache: %v\n%s", r, stackTrace)
-			}
-		}()
-
-		// Save all the results to the cache
-		for i, item := range items {
-			key := item.key
-			cacheVal, err := serializeResultsToCache(funcOpts, []reflect.Value{reflect.ValueOf(outs[i])}, functionConfig.outputValueHandlers)
-			if err != nil {
-				log.Printf("Error serializing value: %v", err)
-				unlockIfNeeded(ctx, functionConfig.cache, item)
-			} else {
-				err = functionConfig.cache.saveToCache(ctx, key, cacheVal, funcOpts)
-				if err != nil {
-					log.Printf("Error setting cache: %v", err)
-					unlockIfNeeded(ctx, functionConfig.cache, item)
-				}
-			}
-		}
-	}()
 }
 
 func deserializeAllCachedResults[IN any, OUT any](cachedItems []*keyStatus[IN, OUT], functionConfig cacheFunctionConfig) {

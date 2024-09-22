@@ -70,6 +70,7 @@ func CacheBulkSlice[IN any, OUT any](c *RedisCache, f CtxSliceFunc[IN, OUT], fun
 		if doTiming {
 			var initialLockTimingCtx *timing.Context
 			initialLockTimingCtx, initialLockComplete = timing.Start(ctx, "InitialLock")
+			initialLockTimingCtx.Async = true
 			initialLockCtx = initialLockTimingCtx
 		}
 
@@ -111,6 +112,7 @@ func CacheBulkSlice[IN any, OUT any](c *RedisCache, f CtxSliceFunc[IN, OUT], fun
 			var deserializeComplete timing.Complete
 			if doTiming {
 				_, deserializeComplete = timing.Start(ctx, "DeserializeAllCachedResults")
+				timingCtx.AddDetails("all-hit", true)
 				timingCtx.AddDetails("miss", len(alreadyLocked))
 				timingCtx.AddDetails("hit", len(cachedItems))
 				timingCtx.AddDetails("already-locked", len(alreadyLocked))

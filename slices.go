@@ -6,6 +6,7 @@ import (
 	"github.com/gburgyan/go-timing"
 	"log"
 	"reflect"
+	"runtime"
 	"sort"
 	"sync"
 )
@@ -289,11 +290,30 @@ func handleUncachedItems[IN any, OUT any](ctx context.Context, uncachedItems []*
 		}
 		return
 	}
-	for i, uncachedItem := range uncachedItems {
-		uncachedItem.resultVal = uncachedResults[i]
-		uncachedItem.resultErr = err
 
-		if err == nil {
+	if err != nil {
+		for _, item := range uncachedItems {
+			item.resultErr = err
+			unlockIfNeeded(ctx, functionConfig.cache, item)
+		}
+		return
+	}
+
+	for i, item := range uncachedItems {
+		item.resultVal = uncachedResults[i]
+	}
+
+	go func() {
+		// Trap panics
+		defer func() {
+			if r := recover(); r != nil {
+				stackTrace := make([]byte, 1<<16)
+				stackTrace = stackTrace[:runtime.Stack(stackTrace, true)]
+				log.Printf("Panic saving cache: %v\n%s", r, stackTrace)
+			}
+		}()
+
+		for _, uncachedItem := range uncachedItems {
 			// Save the result to the cache
 			cacheVal, err := serializeResultsToCache(funcOpts, []reflect.Value{reflect.ValueOf(uncachedItem.resultVal)}, functionConfig.outputValueHandlers)
 			if err != nil {
@@ -306,10 +326,8 @@ func handleUncachedItems[IN any, OUT any](ctx context.Context, uncachedItems []*
 					unlockIfNeeded(ctx, functionConfig.cache, uncachedItem)
 				}
 			}
-		} else {
-			unlockIfNeeded(ctx, functionConfig.cache, uncachedItem)
 		}
-	}
+	}()
 }
 
 func handleAlreadyLockedItems[IN any, OUT any](ctx context.Context, funcOpts CacheOptions, functionConfig cacheFunctionConfig, f CtxSliceFunc[IN, OUT], lockedItems []*keyStatus[IN, OUT]) {

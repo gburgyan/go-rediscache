@@ -243,22 +243,37 @@ func refreshAllInBatch[IN any, OUT any](ctx context.Context, f CtxSliceFunc[IN, 
 		}
 		return
 	}
-	// Save all the results to the cache
+
 	for i, item := range items {
-		key := item.key
-		cacheVal, err := serializeResultsToCache(funcOpts, []reflect.Value{reflect.ValueOf(outs[i])}, functionConfig.outputValueHandlers)
-		if err != nil {
-			log.Printf("Error serializing value: %v", err)
-			unlockIfNeeded(ctx, functionConfig.cache, item)
-		} else {
-			err = functionConfig.cache.saveToCache(ctx, key, cacheVal, funcOpts)
-			if err != nil {
-				log.Printf("Error setting cache: %v", err)
-				unlockIfNeeded(ctx, functionConfig.cache, item)
-			}
-		}
 		item.resultVal = outs[i]
 	}
+
+	go func() {
+		// Trap panics
+		defer func() {
+			if r := recover(); r != nil {
+				stackTrace := make([]byte, 1<<16)
+				stackTrace = stackTrace[:runtime.Stack(stackTrace, true)]
+				log.Printf("Panic saving cache: %v\n%s", r, stackTrace)
+			}
+		}()
+
+		// Save all the results to the cache
+		for i, item := range items {
+			key := item.key
+			cacheVal, err := serializeResultsToCache(funcOpts, []reflect.Value{reflect.ValueOf(outs[i])}, functionConfig.outputValueHandlers)
+			if err != nil {
+				log.Printf("Error serializing value: %v", err)
+				unlockIfNeeded(ctx, functionConfig.cache, item)
+			} else {
+				err = functionConfig.cache.saveToCache(ctx, key, cacheVal, funcOpts)
+				if err != nil {
+					log.Printf("Error setting cache: %v", err)
+					unlockIfNeeded(ctx, functionConfig.cache, item)
+				}
+			}
+		}
+	}()
 }
 
 func deserializeAllCachedResults[IN any, OUT any](cachedItems []*keyStatus[IN, OUT], functionConfig cacheFunctionConfig) {

@@ -161,14 +161,7 @@ func CacheBulkSlice[IN any, OUT any](c *RedisCache, f CtxSliceFunc[IN, OUT], fun
 		if len(cachedItems) > 0 {
 			go func() {
 				defer wg.Done()
-				var deserializeComplete timing.Complete
-				if doTiming {
-					_, deserializeComplete = timing.Start(ctx, "Deserialize")
-				}
-				handleCachedItems(cachedItems, functionConfig)
-				if doTiming {
-					deserializeComplete()
-				}
+				handleCachedItems(ctx, cachedItems, functionConfig, funcOpts)
 			}()
 			wg.Add(1)
 		}
@@ -176,17 +169,7 @@ func CacheBulkSlice[IN any, OUT any](c *RedisCache, f CtxSliceFunc[IN, OUT], fun
 		if len(lockedItems) > 0 {
 			go func() {
 				defer wg.Done()
-				var functionComplete timing.Complete
-				functionCtx := ctx
-				if doTiming {
-					var functionTimingCtx *timing.Context
-					functionTimingCtx, functionComplete = timing.Start(ctx, "Function")
-					functionCtx = functionTimingCtx
-				}
-				handleUncachedItems(functionCtx, lockedItems, f, funcOpts, functionConfig)
-				if doTiming {
-					functionComplete()
-				}
+				handleUncachedItems(ctx, lockedItems, f, funcOpts, functionConfig)
 			}()
 			wg.Add(1)
 		}
@@ -194,17 +177,7 @@ func CacheBulkSlice[IN any, OUT any](c *RedisCache, f CtxSliceFunc[IN, OUT], fun
 		if len(alreadyLocked) > 0 {
 			go func() {
 				defer wg.Done()
-				var lockedWaitingTiming timing.Complete
-				lockedCtx := ctx
-				if doTiming {
-					var lockedTimingCtx *timing.Context
-					lockedTimingCtx, lockedWaitingTiming = timing.Start(ctx, "LockedWaiting")
-					lockedCtx = lockedTimingCtx
-				}
-				handleAlreadyLockedItems(lockedCtx, funcOpts, doTiming, functionConfig, f, alreadyLocked)
-				if doTiming {
-					lockedWaitingTiming()
-				}
+				handleAlreadyLockedItems(ctx, funcOpts, functionConfig, f, alreadyLocked)
 			}()
 			wg.Add(1)
 		}
@@ -292,6 +265,14 @@ func deserializeAllCachedResults[IN any, OUT any](cachedItems []*keyStatus[IN, O
 }
 
 func handleUncachedItems[IN any, OUT any](ctx context.Context, uncachedItems []*keyStatus[IN, OUT], f CtxSliceFunc[IN, OUT], funcOpts CacheOptions, functionConfig cacheFunctionConfig) {
+	if funcOpts.EnableTiming {
+		var functionTimingCtx *timing.Context
+		var functionComplete timing.Complete
+		functionTimingCtx, functionComplete = timing.Start(ctx, "RunFunction")
+		ctx = functionTimingCtx
+		defer functionComplete()
+	}
+
 	uncachedInputs := make([]IN, len(uncachedItems))
 	for i, item := range uncachedItems {
 		uncachedInputs[i] = item.input
@@ -327,9 +308,18 @@ func handleUncachedItems[IN any, OUT any](ctx context.Context, uncachedItems []*
 	}
 }
 
-func handleAlreadyLockedItems[IN any, OUT any](ctx context.Context, funcOpts CacheOptions, doTiming bool, functionConfig cacheFunctionConfig, f CtxSliceFunc[IN, OUT], lockedItems []*keyStatus[IN, OUT]) {
+func handleAlreadyLockedItems[IN any, OUT any](ctx context.Context, funcOpts CacheOptions, functionConfig cacheFunctionConfig, f CtxSliceFunc[IN, OUT], lockedItems []*keyStatus[IN, OUT]) {
+	if funcOpts.EnableTiming {
+		var lockedTimingCtx *timing.Context
+		var complete timing.Complete
+		lockedTimingCtx, complete = timing.Start(ctx, "LockedWaiting")
+		lockedTimingCtx.Async = true
+		ctx = lockedTimingCtx
+		defer complete()
+	}
+
 	lockedResults := parallelRun(ctx, lockedItems, func(ctx context.Context, item *keyStatus[IN, OUT]) (BulkReturn[OUT], error) {
-		value, status, err := functionConfig.cache.getCachedValueOrLock(ctx, item.key, funcOpts, doTiming, false)
+		value, status, err := functionConfig.cache.getCachedValueOrLock(ctx, item.key, funcOpts, funcOpts.EnableTiming, false)
 		item.status = status
 		if len(value) > 0 {
 			toResults, _, err := deserializeCacheToResults(value, functionConfig.outputValueHandlers)
@@ -338,7 +328,17 @@ func handleAlreadyLockedItems[IN any, OUT any](ctx context.Context, funcOpts Cac
 		// At this point we have a couple of possibilities:
 		// * The lock was acquired and the value was not in the cache, so we need to compute it
 		inSlice := []IN{item.input}
-		singleResult, err := f(ctx, inSlice)
+		functionCtx := ctx
+		var functionComplete timing.Complete
+		if funcOpts.EnableTiming {
+			var functionTimingCtx *timing.Context
+			functionTimingCtx, functionComplete = timing.Start(ctx, "RunFunction")
+			functionCtx = functionTimingCtx
+		}
+		singleResult, err := f(functionCtx, inSlice)
+		if funcOpts.EnableTiming {
+			functionComplete()
+		}
 		if len(singleResult) != 1 {
 			err = fmt.Errorf("expected 1 result, got %d", len(singleResult))
 		}
@@ -387,7 +387,11 @@ func unlockIfNeeded[IN, OUT any](ctx context.Context, c *RedisCache, item *keySt
 //   - cachedItems: []*keyStatus - A slice of keyStatus pointers representing the cached items.
 //   - functionConfig: cacheFunctionConfig - The configuration for the cache function.
 //   - results: []BulkReturn[OUT] - A slice to store the deserialized results and any errors.
-func handleCachedItems[IN, OUT any](cachedItems []*keyStatus[IN, OUT], functionConfig cacheFunctionConfig) {
+func handleCachedItems[IN, OUT any](ctx context.Context, cachedItems []*keyStatus[IN, OUT], functionConfig cacheFunctionConfig, funcOpts CacheOptions) {
+	if funcOpts.EnableTiming {
+		_, complete := timing.Start(ctx, "Deserialize")
+		defer complete()
+	}
 	// Iterate over each cached item
 	for _, item := range cachedItems {
 		// Deserialize the cached value into results

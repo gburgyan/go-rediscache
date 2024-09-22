@@ -45,15 +45,7 @@ func TestSliceReal(t *testing.T) {
 		return results, nil
 	}
 
-	cf := CacheBulkSlice(c, f, CacheOptions{
-		TTL:          time.Minute,
-		LockTTL:      time.Minute,
-		LockWait:     time.Second * 10,
-		LockRetry:    time.Millisecond * 200,
-		KeyPrefix:    "GoCache-",
-		EnableTiming: true,
-		now:          time.Now,
-	})
+	cf := CacheBulkSlice(c, f)
 
 	s, err := cf(timingCtx, []string{"test1", "test2", "test3", "test4"})
 

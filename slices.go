@@ -36,7 +36,11 @@ type keyStatus[IN any, OUT any] struct {
 	resultErr error
 }
 
-// CacheBulkSlice is a function that returns a function to handle bulk caching operations.
+func CacheBulkSlice[IN any, OUT any](c *RedisCache, f CtxSliceFunc[IN, OUT]) func(ctx context.Context, in []IN) ([]BulkReturn[OUT], error) {
+	return CacheBulkSliceOpts(c, f, CacheOptions{})
+}
+
+// CacheBulkSliceOpts is a function that returns a function to handle bulk caching operations.
 // It takes a RedisCache instance, a function to process the input slice, cache options,
 // and a boolean to indicate if the entire batch should be refreshed if there is a cache miss
 // on any input.
@@ -45,12 +49,12 @@ type keyStatus[IN any, OUT any] struct {
 //   - c: *RedisCache - The Redis cache instance.
 //   - f: CtxSliceFunc[IN, OUT] - The function to process the input slice.
 //   - funcOpts: CacheOptions - The cache options.
-//   - refreshEntireBatch: bool - Whether to refresh the entire batch if there
-//     is a cache miss on any input.
 //
 // Returns:
 // - func(ctx context.Context, in []IN) ([]BulkReturn[OUT], error) - A function that processes the input slice and returns the results.
-func CacheBulkSlice[IN any, OUT any](c *RedisCache, f CtxSliceFunc[IN, OUT], funcOpts CacheOptions) func(ctx context.Context, in []IN) ([]BulkReturn[OUT], error) {
+func CacheBulkSliceOpts[IN any, OUT any](c *RedisCache, f CtxSliceFunc[IN, OUT], funcOpts CacheOptions) func(ctx context.Context, in []IN) ([]BulkReturn[OUT], error) {
+	funcOpts.overlayCacheOptions(c.opts)
+
 	// Setup the cache function configuration
 	functionConfig := c.setupCacheFunctionConfig(func(IN) OUT { panic("not to be called") }, funcOpts)
 

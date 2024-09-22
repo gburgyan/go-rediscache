@@ -112,14 +112,16 @@ func CacheBulkSliceOpts[IN any, OUT any](c *RedisCache, f CtxSliceFunc[IN, OUT],
 			}
 		}
 
+		if doTiming {
+			timingCtx.AddDetails("hit", len(cachedItems))
+			timingCtx.AddDetails("already-locked", len(alreadyLocked))
+			timingCtx.AddDetails("miss", len(lockedItems))
+		}
+
 		// If all items are cached, deserialize and return results
 		if len(cachedItems) == len(in) {
 			if doTiming {
 				timingCtx.AddDetails("all-hit", true)
-				timingCtx.AddDetails("miss", len(alreadyLocked))
-				timingCtx.AddDetails("hit", len(cachedItems))
-				timingCtx.AddDetails("already-locked", len(alreadyLocked))
-				timingCtx.AddDetails("miss", len(lockedItems))
 			}
 
 			handleCachedItems(ctx, cachedItems, functionConfig, funcOpts)
@@ -131,9 +133,6 @@ func CacheBulkSliceOpts[IN any, OUT any](c *RedisCache, f CtxSliceFunc[IN, OUT],
 		if funcOpts.RefreshEntireBatch {
 			if doTiming {
 				timingCtx.AddDetails("complete-refresh", true)
-				timingCtx.AddDetails("hit", len(cachedItems))
-				timingCtx.AddDetails("already-locked", len(alreadyLocked))
-				timingCtx.AddDetails("miss", len(lockedItems))
 			}
 			handleUncachedItems(ctx, items, f, funcOpts, functionConfig)
 			return composeResults(items)
@@ -142,10 +141,6 @@ func CacheBulkSliceOpts[IN any, OUT any](c *RedisCache, f CtxSliceFunc[IN, OUT],
 		var parallelComplete timing.Complete
 		var parallelContext *timing.Context
 		if doTiming {
-			timingCtx.AddDetails("hit", len(cachedItems))
-			timingCtx.AddDetails("already-locked", len(alreadyLocked))
-			timingCtx.AddDetails("miss", len(lockedItems))
-
 			parallelContext, parallelComplete = timing.Start(ctx, "Parallel")
 			parallelContext.Async = true
 			ctx = parallelContext

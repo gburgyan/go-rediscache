@@ -3,8 +3,10 @@ package rediscache
 import (
 	"context"
 	"fmt"
+	"github.com/gburgyan/go-timing"
 	"log"
 	"reflect"
+	"sort"
 	"sync"
 )
 
@@ -48,12 +50,25 @@ type keyStatus[IN any, OUT any] struct {
 //
 // Returns:
 // - func(ctx context.Context, in []IN) ([]BulkReturn[OUT], error) - A function that processes the input slice and returns the results.
-func CacheBulkSlice[IN any, OUT any](c *RedisCache, f CtxSliceFunc[IN, OUT], funcOpts CacheOptions, refreshEntireBatch bool) func(ctx context.Context, in []IN) []BulkReturn[OUT] {
+func CacheBulkSlice[IN any, OUT any](c *RedisCache, f CtxSliceFunc[IN, OUT], funcOpts CacheOptions) func(ctx context.Context, in []IN) ([]BulkReturn[OUT], error) {
 	// Setup the cache function configuration
 	functionConfig := c.setupCacheFunctionConfig(func(IN) (OUT, error) { panic("not to be called") }, funcOpts)
 
-	return func(ctx context.Context, in []IN) []BulkReturn[OUT] {
+	return func(ctx context.Context, in []IN) ([]BulkReturn[OUT], error) {
 		doTiming := funcOpts.EnableTiming
+
+		var timingCtx *timing.Context
+		if doTiming {
+			var complete timing.Complete
+			timingCtx, complete = timing.Start(ctx, "CacheBulkSlice-"+functionConfig.returnTypeKey)
+			ctx = timingCtx
+			defer complete()
+		}
+
+		var initialLockComplete timing.Complete
+		if doTiming {
+			_, initialLockComplete = timing.Start(ctx, "InitialLock")
+		}
 
 		// Run the parallel function to get key statuses
 		keyStatuses := parallelRun(ctx, in, func(ctx context.Context, input IN) (keyStatus[IN, OUT], error) {
@@ -62,7 +77,11 @@ func CacheBulkSlice[IN any, OUT any](c *RedisCache, f CtxSliceFunc[IN, OUT], fun
 			return keyStatus[IN, OUT]{key: key, cachedValue: value, status: locked, input: input}, err
 		})
 
-		var items, cachedItems, uncachedItems, lockedItems, alreadyLockedItems []*keyStatus[IN, OUT]
+		if doTiming {
+			initialLockComplete()
+		}
+
+		var items, cachedItems, alreadyLocked, lockedItems, alreadyLockedItems []*keyStatus[IN, OUT]
 
 		// Categorize key statuses
 		for i, item := range keyStatuses {
@@ -72,7 +91,7 @@ func CacheBulkSlice[IN any, OUT any](c *RedisCache, f CtxSliceFunc[IN, OUT], fun
 			items = append(items, &status)
 			switch {
 			case item.Error != nil || status.status == LockStatusError:
-				uncachedItems = append(uncachedItems, &status)
+				alreadyLocked = append(alreadyLocked, &status)
 			case len(status.cachedValue) > 0:
 				cachedItems = append(cachedItems, &status)
 			case status.status == LockStatusLockAcquired:
@@ -86,36 +105,104 @@ func CacheBulkSlice[IN any, OUT any](c *RedisCache, f CtxSliceFunc[IN, OUT], fun
 
 		// If all items are cached, deserialize and return results
 		if len(cachedItems) == len(in) {
+			var deserializeComplete timing.Complete
+			if doTiming {
+				_, deserializeComplete = timing.Start(ctx, "DeserializeAllCachedResults")
+				timingCtx.AddDetails("miss", len(alreadyLocked))
+				timingCtx.AddDetails("hit", len(cachedItems))
+				timingCtx.AddDetails("already-locked", len(alreadyLocked))
+				timingCtx.AddDetails("miss", len(lockedItems))
+			}
+
 			deserializeAllCachedResults(cachedItems, functionConfig)
+
+			if doTiming {
+				deserializeComplete()
+			}
 			return composeResults(cachedItems)
 		}
 
 		// If refreshEntireBatch is true, refresh all items in batch
-		if refreshEntireBatch {
+		if funcOpts.RefreshEntireBatch {
+			var refreshComplete timing.Complete
+			if doTiming {
+				_, refreshComplete = timing.Start(ctx, "RefreshAllInBatch")
+				timingCtx.AddDetails("complete-refresh", true)
+				timingCtx.AddDetails("hit", len(cachedItems))
+				timingCtx.AddDetails("already-locked", len(alreadyLocked))
+				timingCtx.AddDetails("miss", len(lockedItems))
+			}
 			refreshAllInBatch(ctx, f, items, functionConfig, funcOpts)
+			if doTiming {
+				refreshComplete()
+			}
 			return composeResults(items)
 		}
 
+		var parallelComplete timing.Complete
+		var parallelContext *timing.Context
+		if doTiming {
+			timingCtx.AddDetails("hit", len(cachedItems))
+			timingCtx.AddDetails("already-locked", len(alreadyLocked))
+			timingCtx.AddDetails("miss", len(lockedItems))
+
+			parallelContext, parallelComplete = timing.Start(ctx, "Parallel")
+			parallelContext.Async = true
+			ctx = parallelContext
+		}
+
 		var wg sync.WaitGroup
-		wg.Add(3)
 
-		// Handle cached items in a separate goroutine
-		go func() {
-			defer wg.Done()
-			handleCachedItems(cachedItems, functionConfig)
-		}()
+		if len(cachedItems) > 0 {
+			go func() {
+				defer wg.Done()
+				var deserializeComplete timing.Complete
+				if doTiming {
+					_, deserializeComplete = timing.Start(ctx, "Deserialize")
+				}
+				handleCachedItems(cachedItems, functionConfig)
+				if doTiming {
+					deserializeComplete()
+				}
+			}()
+			wg.Add(1)
+		}
 
-		// Handle locked items in a separate goroutine
-		go func() {
-			defer wg.Done()
-			handleLockedItems(ctx, funcOpts, doTiming, functionConfig, f, lockedItems)
-		}()
+		if len(lockedItems) > 0 {
+			go func() {
+				defer wg.Done()
+				var functionComplete timing.Complete
+				functionCtx := ctx
+				if doTiming {
+					var functionTimingCtx *timing.Context
+					functionTimingCtx, functionComplete = timing.Start(ctx, "Function")
+					functionCtx = functionTimingCtx
+				}
+				handleUncachedItems(functionCtx, lockedItems, f, funcOpts, functionConfig)
+				if doTiming {
+					functionComplete()
+				}
+			}()
+			wg.Add(1)
+		}
 
-		// Handle uncached items in a separate goroutine
-		go func() {
-			defer wg.Done()
-			handleUncachedItems(ctx, uncachedItems, f, funcOpts, functionConfig)
-		}()
+		if len(alreadyLocked) > 0 {
+			go func() {
+				defer wg.Done()
+				var lockedWaitingTiming timing.Complete
+				lockedCtx := ctx
+				if doTiming {
+					var lockedTimingCtx *timing.Context
+					lockedTimingCtx, lockedWaitingTiming = timing.Start(ctx, "LockedWaiting")
+					lockedCtx = lockedTimingCtx
+				}
+				handleLockedItems(lockedCtx, funcOpts, doTiming, functionConfig, f, alreadyLocked)
+				if doTiming {
+					lockedWaitingTiming()
+				}
+			}()
+			wg.Add(1)
+		}
 
 		// Wait for all goroutines to complete or context to timeout
 		done := make(chan struct{})
@@ -127,19 +214,30 @@ func CacheBulkSlice[IN any, OUT any](c *RedisCache, f CtxSliceFunc[IN, OUT], fun
 		select {
 		case <-done:
 		case <-ctx.Done():
-			log.Println("Operation timed out")
+			return nil, ctx.Err()
+		}
+
+		if doTiming {
+			parallelComplete()
 		}
 
 		return composeResults(items)
 	}
 }
 
-func composeResults[IN, OUT any](items []*keyStatus[IN, OUT]) []BulkReturn[OUT] {
+func composeResults[IN, OUT any](items []*keyStatus[IN, OUT]) ([]BulkReturn[OUT], error) {
+	// Sort the items by index
+	sort.Slice(items, func(i, j int) bool {
+		return items[i].index < items[j].index
+	})
 	results := make([]BulkReturn[OUT], len(items))
-	for _, item := range items {
+	for i, item := range items {
+		if item.index != i {
+			return nil, fmt.Errorf("expected index %d, got %d", i, item.index)
+		}
 		results[item.index] = BulkReturn[OUT]{Result: item.resultVal, Error: item.resultErr}
 	}
-	return results
+	return results, nil
 }
 
 func refreshAllInBatch[IN any, OUT any](ctx context.Context, f CtxSliceFunc[IN, OUT], items []*keyStatus[IN, OUT], functionConfig cacheFunctionConfig, funcOpts CacheOptions) {
@@ -206,7 +304,7 @@ func handleUncachedItems[IN any, OUT any](ctx context.Context, uncachedItems []*
 		uncachedItem.resultErr = err
 
 		// Save the result to the cache
-		cacheVal, err := serializeResultsToCache(funcOpts, []reflect.Value{reflect.ValueOf(uncachedResults[i])}, functionConfig.outputValueHandlers)
+		cacheVal, err := serializeResultsToCache(funcOpts, []reflect.Value{reflect.ValueOf(uncachedItem.resultVal)}, functionConfig.outputValueHandlers)
 		if err != nil {
 			log.Printf("Error setting cache: %v", err)
 			unlockIfNeeded(ctx, functionConfig.cache, uncachedItem)

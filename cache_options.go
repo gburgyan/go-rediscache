@@ -53,6 +53,12 @@ type CacheOptions struct {
 	// in Redis.
 	EncryptionHandler EncryptionHandler
 
+	// RefreshEntireBatch is a flag that indicates whether the entire batch should be
+	// refreshed when a slice-cached function is refreshed. If set to true, the entire
+	// batch will be refreshed if there are any cache misses. This is useful when there
+	// is no added cost to refreshing the entire batch.
+	RefreshEntireBatch bool
+
 	// now is a function that returns the current time. This is used for testing purposes
 	// to mock the current time.
 	now func() time.Time

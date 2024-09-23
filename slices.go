@@ -124,7 +124,7 @@ func CacheBulkSliceOpts[IN any, OUT any](c *RedisCache, f CtxSliceFunc[IN, OUT],
 				timingCtx.AddDetails("all-hit", true)
 			}
 
-			handleCachedItems(ctx, cachedItems, functionConfig, funcOpts)
+			handleCachedItems(ctx, cachedItems, f, functionConfig, funcOpts)
 
 			return composeResults(cachedItems)
 		}
@@ -151,7 +151,7 @@ func CacheBulkSliceOpts[IN any, OUT any](c *RedisCache, f CtxSliceFunc[IN, OUT],
 		if len(cachedItems) > 0 {
 			go func() {
 				defer wg.Done()
-				handleCachedItems(ctx, cachedItems, functionConfig, funcOpts)
+				handleCachedItems(ctx, cachedItems, f, functionConfig, funcOpts)
 			}()
 			wg.Add(1)
 		}
@@ -286,44 +286,49 @@ func handleAlreadyLockedItems[IN any, OUT any](ctx context.Context, funcOpts Cac
 			toResults, _, err := deserializeCacheToResults(value, functionConfig.outputValueHandlers)
 			return BulkReturn[OUT]{Result: toResults[0].Interface().(OUT), Error: err}, nil
 		}
-		// At this point we have a couple of possibilities:
-		// * The lock was acquired and the value was not in the cache, so we need to compute it
-		inSlice := []IN{item.input}
-		functionCtx := ctx
-		var functionComplete timing.Complete
-		if funcOpts.EnableTiming {
-			var functionTimingCtx *timing.Context
-			functionTimingCtx, functionComplete = timing.Start(ctx, "RunFunction")
-			functionCtx = functionTimingCtx
-		}
-		singleResult, err := f(functionCtx, inSlice)
-		if funcOpts.EnableTiming {
-			functionComplete()
-		}
-		if len(singleResult) != 1 {
-			err = fmt.Errorf("expected 1 result, got %d", len(singleResult))
-		}
-		if err == nil {
-			// Save to cache
-			cacheVal, err := serializeResultsToCache(funcOpts, []reflect.Value{reflect.ValueOf(singleResult[0])}, functionConfig.outputValueHandlers)
-			if err != nil {
-				log.Printf("Error serializing to cache: %v", err)
-				unlockIfNeeded(ctx, functionConfig.cache, item)
-			} else {
-				err = functionConfig.cache.saveToCache(ctx, item.key, cacheVal, funcOpts)
-				if err != nil {
-					log.Printf("Error setting cache: %v", err)
-					unlockIfNeeded(ctx, functionConfig.cache, item)
-				}
-			}
-		}
-		return BulkReturn[OUT]{Result: singleResult[0], Error: err}, nil
+		// We waited for the lock to get replaced with a value, but it didn't happen.
+		// Compute the value and save it to the cache.
+		singleResult, err := runSingleValueAndCache(ctx, item, f, funcOpts, functionConfig)
+		return BulkReturn[OUT]{Result: singleResult, Error: err}, nil
 	})
 	// Now deserialize the locked items
 	for i, item := range lockedItems {
 		item.resultVal = lockedResults[i].Result.Result
 		item.resultErr = lockedResults[i].Error
 	}
+}
+
+func runSingleValueAndCache[IN, OUT any](ctx context.Context, item *keyStatus[IN, OUT], f CtxSliceFunc[IN, OUT], funcOpts CacheOptions, functionConfig cacheFunctionConfig) (OUT, error) {
+	inSlice := []IN{item.input}
+	functionCtx := ctx
+	var functionComplete timing.Complete
+	if funcOpts.EnableTiming {
+		var functionTimingCtx *timing.Context
+		functionTimingCtx, functionComplete = timing.Start(ctx, "RunFunction")
+		functionCtx = functionTimingCtx
+	}
+	singleResult, err := f(functionCtx, inSlice)
+	if funcOpts.EnableTiming {
+		functionComplete()
+	}
+	if len(singleResult) != 1 {
+		err = fmt.Errorf("expected 1 result, got %d", len(singleResult))
+	}
+	if err == nil {
+		// Save to cache
+		cacheVal, err := serializeResultsToCache(funcOpts, []reflect.Value{reflect.ValueOf(singleResult[0])}, functionConfig.outputValueHandlers)
+		if err != nil {
+			log.Printf("Error serializing to cache: %v", err)
+			unlockIfNeeded(ctx, functionConfig.cache, item)
+		} else {
+			err = functionConfig.cache.saveToCache(ctx, item.key, cacheVal, funcOpts)
+			if err != nil {
+				log.Printf("Error setting cache: %v", err)
+				unlockIfNeeded(ctx, functionConfig.cache, item)
+			}
+		}
+	}
+	return singleResult[0], err
 }
 
 // unlockIfNeeded unlocks the cache for the given key if the lock was acquired.
@@ -348,7 +353,7 @@ func unlockIfNeeded[IN, OUT any](ctx context.Context, c *RedisCache, item *keySt
 //   - cachedItems: []*keyStatus - A slice of keyStatus pointers representing the cached items.
 //   - functionConfig: cacheFunctionConfig - The configuration for the cache function.
 //   - results: []BulkReturn[OUT] - A slice to store the deserialized results and any errors.
-func handleCachedItems[IN, OUT any](ctx context.Context, cachedItems []*keyStatus[IN, OUT], functionConfig cacheFunctionConfig, funcOpts CacheOptions) {
+func handleCachedItems[IN, OUT any](ctx context.Context, cachedItems []*keyStatus[IN, OUT], f CtxSliceFunc[IN, OUT], functionConfig cacheFunctionConfig, funcOpts CacheOptions) {
 	if funcOpts.EnableTiming {
 		_, complete := timing.Start(ctx, "Deserialize")
 		defer complete()
@@ -357,8 +362,14 @@ func handleCachedItems[IN, OUT any](ctx context.Context, cachedItems []*keyStatu
 	for _, item := range cachedItems {
 		// Deserialize the cached value into results
 		toResults, _, err := deserializeCacheToResults(item.cachedValue, functionConfig.outputValueHandlers)
-		// TODO: Use the returned time to determine if the cache should be refreshed
-		item.resultVal = toResults[0].Interface().(OUT)
-		item.resultErr = err
+		if err != nil {
+			out, err := runSingleValueAndCache(ctx, item, f, funcOpts, functionConfig)
+			item.resultVal = out
+			item.resultErr = err
+		} else {
+			// TODO: Use the returned time to determine if the cache should be refreshed
+			item.resultVal = toResults[0].Interface().(OUT)
+			item.resultErr = err
+		}
 	}
 }

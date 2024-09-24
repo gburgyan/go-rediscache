@@ -124,7 +124,7 @@ func CacheBulkSliceOpts[IN any, OUT any](c *RedisCache, f CtxSliceFunc[IN, OUT],
 				timingCtx.AddDetails("all-hit", true)
 			}
 
-			handleCachedItems(ctx, cachedItems, f, functionConfig, funcOpts)
+			handleCachedItems(ctx, cachedItems, f, funcOpts, functionConfig)
 
 			return composeResults(cachedItems)
 		}
@@ -149,27 +149,27 @@ func CacheBulkSliceOpts[IN any, OUT any](c *RedisCache, f CtxSliceFunc[IN, OUT],
 		var wg sync.WaitGroup
 
 		if len(cachedItems) > 0 {
+			wg.Add(1)
 			go func() {
 				defer wg.Done()
-				handleCachedItems(ctx, cachedItems, f, functionConfig, funcOpts)
+				handleCachedItems(ctx, cachedItems, f, funcOpts, functionConfig)
 			}()
-			wg.Add(1)
 		}
 
 		if len(lockedItems) > 0 {
+			wg.Add(1)
 			go func() {
 				defer wg.Done()
 				handleUncachedItems(ctx, lockedItems, f, funcOpts, functionConfig)
 			}()
-			wg.Add(1)
 		}
 
 		if len(alreadyLocked) > 0 {
+			wg.Add(1)
 			go func() {
 				defer wg.Done()
-				handleAlreadyLockedItems(ctx, funcOpts, functionConfig, f, alreadyLocked)
+				handleAlreadyLockedItems(ctx, alreadyLocked, f, funcOpts, functionConfig)
 			}()
-			wg.Add(1)
 		}
 
 		// Wait for all goroutines to complete or context to timeout
@@ -269,7 +269,7 @@ func handleUncachedItems[IN any, OUT any](ctx context.Context, uncachedItems []*
 	}()
 }
 
-func handleAlreadyLockedItems[IN any, OUT any](ctx context.Context, funcOpts CacheOptions, functionConfig cacheFunctionConfig, f CtxSliceFunc[IN, OUT], lockedItems []*keyStatus[IN, OUT]) {
+func handleAlreadyLockedItems[IN any, OUT any](ctx context.Context, lockedItems []*keyStatus[IN, OUT], f CtxSliceFunc[IN, OUT], funcOpts CacheOptions, functionConfig cacheFunctionConfig) {
 	if funcOpts.EnableTiming {
 		var lockedTimingCtx *timing.Context
 		var complete timing.Complete
@@ -353,7 +353,7 @@ func unlockIfNeeded[IN, OUT any](ctx context.Context, c *RedisCache, item *keySt
 //   - cachedItems: []*keyStatus - A slice of keyStatus pointers representing the cached items.
 //   - functionConfig: cacheFunctionConfig - The configuration for the cache function.
 //   - results: []BulkReturn[OUT] - A slice to store the deserialized results and any errors.
-func handleCachedItems[IN, OUT any](ctx context.Context, cachedItems []*keyStatus[IN, OUT], f CtxSliceFunc[IN, OUT], functionConfig cacheFunctionConfig, funcOpts CacheOptions) {
+func handleCachedItems[IN, OUT any](ctx context.Context, cachedItems []*keyStatus[IN, OUT], f CtxSliceFunc[IN, OUT], funcOpts CacheOptions, functionConfig cacheFunctionConfig) {
 	if funcOpts.EnableTiming {
 		_, complete := timing.Start(ctx, "Deserialize")
 		defer complete()

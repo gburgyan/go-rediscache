@@ -85,7 +85,7 @@ func CacheBulkSlice[IN any, OUT any](c *RedisCache, f CtxSliceFunc[IN, OUT]) fun
 //   - funcOpts: CacheOptions - The cache options.
 //
 // Returns:
-// - func(ctx context.Context, in []IN) ([]BulkReturn[OUT], error) - A function that processes the input slice and returns the results.
+// - func(ctx context.Context, in []IN) ([]OUT, error) - A function that processes the input slice and returns the results.
 func CacheBulkSliceOpts[IN any, OUT any](c *RedisCache, f CtxSliceFunc[IN, OUT], funcOpts CacheOptions) func(ctx context.Context, in []IN) ([]OUT, error) {
 	funcOpts.overlayCacheOptions(c.opts)
 

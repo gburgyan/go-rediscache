@@ -55,7 +55,7 @@ func TestSliceReal(t *testing.T) {
 	s, err := cf(timingCtx, []string{"test1", "test2", "test3", "test4"})
 
 	assert.NoError(t, err)
-	assert.Equal(t, "processed:test1", s[0].Result.Value)
+	assert.Equal(t, "processed:test1", s[0].Value)
 	assert.Equal(t, 1, callcount)
 
 	fmt.Println(timingCtx.String())
@@ -64,7 +64,7 @@ func TestSliceReal(t *testing.T) {
 	time.Sleep(time.Millisecond * 100)
 
 	s, err = cf(timingCtx, []string{"test1", "test2", "test3", "test4"})
-	assert.Equal(t, "processed:test1", s[0].Result.Value)
+	assert.Equal(t, "processed:test1", s[0].Value)
 	assert.Equal(t, 1, callcount)
 
 	fmt.Println(timingCtx.String())
@@ -123,7 +123,7 @@ func TestSliceMultiAccess_LockWait(t *testing.T) {
 			fctx, complete := timing.Start(timingCtx, "f1")
 			s, err := cf(fctx, []string{"test1", "test2", "test3", "test4"})
 			assert.NoError(t, err)
-			assert.Equal(t, "processed:test1", s[0].Result.Value)
+			assert.Equal(t, "processed:test1", s[0].Value)
 			complete()
 		},
 		func() {
@@ -131,7 +131,7 @@ func TestSliceMultiAccess_LockWait(t *testing.T) {
 			fctx, complete := timing.Start(timingCtx, "f2")
 			s, err := cf(fctx, []string{"test1", "test2", "test3", "test4"})
 			assert.NoError(t, err)
-			assert.Equal(t, "processed:test1", s[0].Result.Value)
+			assert.Equal(t, "processed:test1", s[0].Value)
 			complete()
 		},
 	)
@@ -182,7 +182,7 @@ func TestSliceMultiAccess_NewVal(t *testing.T) {
 	f0ctx, complete := timing.Start(timingCtx, "f0")
 	s, err := cf(f0ctx, []string{"test1"})
 	assert.NoError(t, err)
-	assert.Equal(t, "processed:test1", s[0].Result.Value)
+	assert.Equal(t, "processed:test1", s[0].Value)
 	complete()
 	time.Sleep(time.Millisecond * 100)
 
@@ -191,7 +191,7 @@ func TestSliceMultiAccess_NewVal(t *testing.T) {
 			fctx, complete := timing.Start(timingCtx, "f1")
 			s, err := cf(fctx, []string{"test1", "test2", "test3"})
 			assert.NoError(t, err)
-			assert.Equal(t, "processed:test1", s[0].Result.Value)
+			assert.Equal(t, "processed:test1", s[0].Value)
 			complete()
 		},
 		func() {
@@ -199,8 +199,8 @@ func TestSliceMultiAccess_NewVal(t *testing.T) {
 			fctx, complete := timing.Start(timingCtx, "f2")
 			s, err := cf(fctx, []string{"test1", "test2", "test3", "test4"})
 			assert.NoError(t, err)
-			assert.Equal(t, "processed:test1", s[0].Result.Value)
-			assert.Equal(t, "processed:test4", s[3].Result.Value)
+			assert.Equal(t, "processed:test1", s[0].Value)
+			assert.Equal(t, "processed:test4", s[3].Value)
 			complete()
 		},
 	)
@@ -254,7 +254,7 @@ func TestSliceMultiAccess_NewValRefresh(t *testing.T) {
 			fctx, complete := timing.Start(timingCtx, "f1")
 			s, err := cf(fctx, []string{"test1", "test2", "test3"})
 			assert.NoError(t, err)
-			assert.Equal(t, "processed:test1", s[0].Result.Value)
+			assert.Equal(t, "processed:test1", s[0].Value)
 			complete()
 		},
 		func() {
@@ -262,8 +262,8 @@ func TestSliceMultiAccess_NewValRefresh(t *testing.T) {
 			fctx, complete := timing.Start(timingCtx, "f2")
 			s, err := cf(fctx, []string{"test1", "test2", "test3", "test4"})
 			assert.NoError(t, err)
-			assert.Equal(t, "processed:test1", s[0].Result.Value)
-			assert.Equal(t, "processed:test4", s[3].Result.Value)
+			assert.Equal(t, "processed:test1", s[0].Value)
+			assert.Equal(t, "processed:test4", s[3].Value)
 			complete()
 		},
 	)
@@ -317,7 +317,7 @@ func TestSliceMultiAccess_Timeout(t *testing.T) {
 			fctx, complete := timing.Start(timingCtx, "f1")
 			s, err := cf(fctx, []string{"test1", "test2"})
 			assert.NoError(t, err)
-			assert.Equal(t, "processed:test1", s[0].Result.Value)
+			assert.Equal(t, "processed:test1", s[0].Value)
 			complete()
 		},
 		func() {
@@ -325,7 +325,7 @@ func TestSliceMultiAccess_Timeout(t *testing.T) {
 			fctx, complete := timing.Start(timingCtx, "f2")
 			s, err := cf(fctx, []string{"test1", "test2"})
 			assert.NoError(t, err)
-			assert.Equal(t, "processed:test1", s[0].Result.Value)
+			assert.Equal(t, "processed:test1", s[0].Value)
 			complete()
 		},
 	)

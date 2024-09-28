@@ -14,15 +14,48 @@ import (
 type CtxArgFunc[IN any, OUT any] func(ctx context.Context, in IN) (OUT, error)
 type CtxSliceFunc[IN any, OUT any] func(ctx context.Context, in []IN) ([]OUT, error)
 
+type SliceError struct {
+	Errors []error
+}
+
+type SliceItemError struct {
+	Index int
+	Err   error
+}
+
+func (e *SliceError) Error() string {
+	return fmt.Sprintf("errors: %v", e.Errors)
+}
+
+func (e *SliceItemError) Error() string {
+	return fmt.Sprintf("index: %d, error: %v", e.Index, e.Err)
+}
+
 type BulkReturn[OUT any] struct {
 	Result OUT
 	Error  error
 }
 
-func CacheBulk[IN any, OUT any](c *RedisCache, f CtxArgFunc[IN, OUT], funcOpts CacheOptions) func(ctx context.Context, in []IN) []BulkReturn[OUT] {
+func CacheBulk[IN any, OUT any](c *RedisCache, f CtxArgFunc[IN, OUT]) func(ctx context.Context, in []IN) ([]OUT, error) {
+	return CacheBulkOpts(c, f, CacheOptions{})
+}
+
+func CacheBulkOpts[IN any, OUT any](c *RedisCache, f CtxArgFunc[IN, OUT], funcOpts CacheOptions) func(ctx context.Context, in []IN) ([]OUT, error) {
 	cf := CacheOpts(c, f, funcOpts)
-	return func(ctx context.Context, in []IN) []BulkReturn[OUT] {
-		return parallelRun(ctx, in, cf)
+	return func(ctx context.Context, in []IN) ([]OUT, error) {
+		rawResults := parallelRun(ctx, in, cf)
+		results := make([]OUT, len(rawResults))
+		sliceErrors := make([]error, 0)
+		for i, rawResult := range rawResults {
+			results[i] = rawResult.Result
+			if rawResult.Error != nil {
+				sliceErrors = append(sliceErrors, &SliceItemError{Index: i, Err: rawResult.Error})
+			}
+		}
+		if len(sliceErrors) > 0 {
+			return results, &SliceError{Errors: sliceErrors}
+		}
+		return results, nil
 	}
 }
 
@@ -37,7 +70,7 @@ type keyStatus[IN any, OUT any] struct {
 	resultErr error
 }
 
-func CacheBulkSlice[IN any, OUT any](c *RedisCache, f CtxSliceFunc[IN, OUT]) func(ctx context.Context, in []IN) ([]BulkReturn[OUT], error) {
+func CacheBulkSlice[IN any, OUT any](c *RedisCache, f CtxSliceFunc[IN, OUT]) func(ctx context.Context, in []IN) ([]OUT, error) {
 	return CacheBulkSliceOpts(c, f, CacheOptions{})
 }
 
@@ -53,13 +86,13 @@ func CacheBulkSlice[IN any, OUT any](c *RedisCache, f CtxSliceFunc[IN, OUT]) fun
 //
 // Returns:
 // - func(ctx context.Context, in []IN) ([]BulkReturn[OUT], error) - A function that processes the input slice and returns the results.
-func CacheBulkSliceOpts[IN any, OUT any](c *RedisCache, f CtxSliceFunc[IN, OUT], funcOpts CacheOptions) func(ctx context.Context, in []IN) ([]BulkReturn[OUT], error) {
+func CacheBulkSliceOpts[IN any, OUT any](c *RedisCache, f CtxSliceFunc[IN, OUT], funcOpts CacheOptions) func(ctx context.Context, in []IN) ([]OUT, error) {
 	funcOpts.overlayCacheOptions(c.opts)
 
 	// Setup the cache function configuration
 	functionConfig := c.setupCacheFunctionConfig(func(IN) OUT { panic("not to be called") }, funcOpts)
 
-	return func(ctx context.Context, in []IN) ([]BulkReturn[OUT], error) {
+	return func(ctx context.Context, in []IN) ([]OUT, error) {
 		doTiming := funcOpts.EnableTiming
 
 		var timingCtx *timing.Context
@@ -194,17 +227,24 @@ func CacheBulkSliceOpts[IN any, OUT any](c *RedisCache, f CtxSliceFunc[IN, OUT],
 	}
 }
 
-func composeResults[IN, OUT any](items []*keyStatus[IN, OUT]) ([]BulkReturn[OUT], error) {
+func composeResults[IN, OUT any](items []*keyStatus[IN, OUT]) ([]OUT, error) {
 	// Sort the items by index
 	sort.Slice(items, func(i, j int) bool {
 		return items[i].index < items[j].index
 	})
-	results := make([]BulkReturn[OUT], len(items))
+	results := make([]OUT, len(items))
+	sliceErrors := make([]error, 0)
 	for i, item := range items {
 		if item.index != i {
 			return nil, fmt.Errorf("expected index %d, got %d", i, item.index)
 		}
-		results[item.index] = BulkReturn[OUT]{Result: item.resultVal, Error: item.resultErr}
+		results[item.index] = item.resultVal
+		if item.resultErr != nil {
+			sliceErrors = append(sliceErrors, &SliceItemError{Index: item.index, Err: item.resultErr})
+		}
+	}
+	if len(sliceErrors) > 0 {
+		return results, &SliceError{Errors: sliceErrors}
 	}
 	return results, nil
 }

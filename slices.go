@@ -129,8 +129,9 @@ func CacheBulkSliceOpts[IN any, OUT any](c *RedisCache, f CtxSliceFunc[IN, OUT],
 			return composeResults(cachedItems)
 		}
 
-		// If refreshEntireBatch is true, refresh all items in batch
-		if funcOpts.RefreshEntireBatch {
+		// If refreshEntireBatch is true, refresh all items in batch if there
+		// are any items that aren't in the cache or already being computed.
+		if funcOpts.RefreshEntireBatch && len(lockedItems) > 0 {
 			if doTiming {
 				timingCtx.AddDetails("complete-refresh", true)
 			}

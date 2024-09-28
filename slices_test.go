@@ -273,3 +273,65 @@ func TestSliceMultiAccess_NewValRefresh(t *testing.T) {
 	assert.Equal(t, 2, callcount)
 	assert.Equal(t, 7, itemCount)
 }
+
+func TestSliceMultiAccess_Timeout(t *testing.T) {
+	mini := miniredis.RunT(t)
+
+	ctx := context.Background()
+	timingCtx := timing.Root(ctx)
+
+	// Open a connection to Redis locally
+	redisConnection := redis.NewClient(&redis.Options{
+		Addr: mini.Addr(),
+	})
+
+	c := NewRedisCache(ctx, redisConnection, CacheOptions{
+		TTL:                time.Minute,
+		LockTTL:            time.Minute,
+		LockWait:           time.Millisecond * 500,
+		LockRetry:          time.Millisecond * 100,
+		KeyPrefix:          "GoCache-",
+		EnableTiming:       true,
+		RefreshEntireBatch: false,
+		now:                time.Now,
+	})
+	c.RegisterTypeHandler(sliceResultsType, JsonSerializer, JsonDeserializer)
+
+	callCount := 0
+	itemCount := 0
+	f := func(ctx context.Context, in []string) ([]sliceResults, error) {
+		callCount++
+		var results []sliceResults
+		for _, s := range in {
+			results = append(results, sliceResults{"processed:" + s})
+			itemCount++
+		}
+		time.Sleep(time.Millisecond * 1000)
+		return results, nil
+	}
+
+	cf := CacheBulkSlice(c, f)
+
+	runAllAndWait(
+		func() {
+			fctx, complete := timing.Start(timingCtx, "f1")
+			s, err := cf(fctx, []string{"test1", "test2"})
+			assert.NoError(t, err)
+			assert.Equal(t, "processed:test1", s[0].Result.Value)
+			complete()
+		},
+		func() {
+			time.Sleep(time.Millisecond * 100)
+			fctx, complete := timing.Start(timingCtx, "f2")
+			s, err := cf(fctx, []string{"test1", "test2"})
+			assert.NoError(t, err)
+			assert.Equal(t, "processed:test1", s[0].Result.Value)
+			complete()
+		},
+	)
+
+	fmt.Println(timingCtx.String())
+
+	assert.Equal(t, 3, callCount)
+	assert.Equal(t, 4, itemCount)
+}

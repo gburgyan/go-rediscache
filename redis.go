@@ -3,6 +3,7 @@ package rediscache
 import (
 	"context"
 	"errors"
+	"fmt"
 	"github.com/gburgyan/go-timing"
 	"github.com/go-redis/redis/v8"
 	"time"
@@ -16,6 +17,15 @@ func (e *LockWaitExpiredError) Error() string {
 	return e.message
 }
 
+type LockStatus int
+
+const (
+	LockStatusUnlocked LockStatus = iota
+	LockStatusLockAcquired
+	LockStatusLockFailed
+	LockStatusError
+)
+
 // getCachedValueOrLock attempts to retrieve a value from the cache or acquire a lock if the value is not present.
 //
 // Parameters:
@@ -28,7 +38,7 @@ func (e *LockWaitExpiredError) Error() string {
 // - value: A byte slice representing the cached value, or nil if the value is not present.
 // - locked: A boolean indicating whether a lock was successfully acquired.
 // - err: An error if the operation fails.
-func (r *RedisCache) getCachedValueOrLock(ctx context.Context, key string, opts CacheOptions, doTiming bool) (value []byte, locked bool, err error) {
+func (r *RedisCache) getCachedValueOrLock(ctx context.Context, key string, opts CacheOptions, doTiming bool, skipSpinning bool) (value []byte, locked LockStatus, err error) {
 	var timingCtx *timing.Context
 	if doTiming {
 		var complete timing.Complete
@@ -55,14 +65,14 @@ func (r *RedisCache) getCachedValueOrLock(ctx context.Context, key string, opts 
 				if doTiming {
 					timingCtx.AddDetails("cache-hit", true)
 				}
-				return val, false, nil
+				return val, LockStatusUnlocked, nil
 			}
 		} else {
 			if !errors.Is(err, redis.Nil) {
 				if doTiming {
 					timingCtx.AddDetails("cache-error", true)
 				}
-				return nil, false, err
+				return nil, LockStatusError, err
 			}
 			// The key does not exist in the cache, attempt to lock
 			if doTiming {
@@ -78,10 +88,14 @@ func (r *RedisCache) getCachedValueOrLock(ctx context.Context, key string, opts 
 			}
 			if ok && err == nil {
 				// Lock successfully acquired
-				return nil, true, nil
+				return nil, LockStatusLockAcquired, nil
 			}
 			// In case there is an error while setting the lock, this is
 			// likely due to a race with another process. Retry.
+		}
+
+		if skipSpinning {
+			return nil, LockStatusLockFailed, nil
 		}
 
 		spins++
@@ -94,16 +108,37 @@ func (r *RedisCache) getCachedValueOrLock(ctx context.Context, key string, opts 
 			if doTiming {
 				timingCtx.AddDetails("context-done", true)
 			}
-			return nil, false, ctx.Err()
+			return nil, LockStatusLockFailed, ctx.Err()
 		case <-lockWaitExpire:
 			if doTiming {
 				timingCtx.AddDetails("lock-wait-expired", true)
 			}
-			return nil, false, &LockWaitExpiredError{}
+			return nil, LockStatusLockFailed, &LockWaitExpiredError{}
 		case <-time.After(opts.LockRetry):
 			continue
 		}
 	}
+}
+
+func (r *RedisCache) getCachedValues(ctx context.Context, key []string, doTiming bool) ([][]byte, error) {
+	// Check each of the keys in the cache and return their values if they exist.
+	values := make([][]byte, len(key))
+	if doTiming {
+		_, complete := timing.Start(ctx, "GetCachedValues")
+		defer complete()
+	}
+	cmdResult := r.connection.MGet(ctx, key...)
+	if cmdResult.Err() != nil {
+		return nil, cmdResult.Err()
+	}
+	for i, result := range cmdResult.Val() {
+		if result == nil {
+			values[i] = nil
+			continue
+		}
+		values[i] = []byte(result.(string))
+	}
+	return values, nil
 }
 
 // unlockCache attempts to unlock a cache entry by deleting the key if it is a 0-byte value.
@@ -151,11 +186,12 @@ func (r *RedisCache) unlockCache(ctx context.Context, key string) error {
 //
 // Panics:
 // - If the operation to set the value in the cache fails.
-func (r *RedisCache) saveToCache(ctx context.Context, key string, value []byte, opts CacheOptions) {
+func (r *RedisCache) saveToCache(ctx context.Context, key string, value []byte, opts CacheOptions) error {
 	set := r.connection.Set(ctx, key, value, opts.TTL)
 	if set.Err() != nil {
-		panic(set.Err())
+		return fmt.Errorf("failed to save value to cache: %w", set.Err())
 	}
+	return nil
 }
 
 // lockRefresh attempts to acquire a lock for refreshing the cache entry.

@@ -29,10 +29,10 @@ func Test_getCachedValueOrLock_CacheHit(t *testing.T) {
 
 	mock.ExpectGet(key).SetVal("valid-value")
 
-	value, locked, err := c.getCachedValueOrLock(ctx, key, c.opts, false)
+	value, locked, err := c.getCachedValueOrLock(ctx, key, c.opts, false, false)
 
 	assert.NoError(t, err)
-	assert.False(t, locked)
+	assert.Equal(t, LockStatusUnlocked, locked)
 	assert.Equal(t, []byte("valid-value"), value)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
@@ -56,10 +56,10 @@ func Test_getCachedValueOrLock_CacheError(t *testing.T) {
 
 	mock.ExpectGet(key).SetErr(errors.New("redis error"))
 
-	value, locked, err := c.getCachedValueOrLock(ctx, key, c.opts, false)
+	value, locked, err := c.getCachedValueOrLock(ctx, key, c.opts, false, false)
 
 	assert.Error(t, err)
-	assert.False(t, locked)
+	assert.Equal(t, LockStatusError, locked)
 	assert.Nil(t, value)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
@@ -84,10 +84,10 @@ func Test_getCachedValueOrLock_CacheMiss(t *testing.T) {
 	mock.ExpectGet(key).SetErr(redis.Nil)
 	mock.ExpectSetNX(key, "", c.opts.LockTTL).SetVal(true)
 
-	value, locked, err := c.getCachedValueOrLock(ctx, key, c.opts, false)
+	value, locked, err := c.getCachedValueOrLock(ctx, key, c.opts, false, false)
 
 	assert.NoError(t, err)
-	assert.True(t, locked)
+	assert.Equal(t, LockStatusLockAcquired, locked)
 	assert.Nil(t, value)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
@@ -112,10 +112,10 @@ func Test_getCachedValueOrLock_LockedToVal(t *testing.T) {
 	mock.ExpectGet(key).SetVal("")
 	mock.ExpectGet(key).SetVal("valid-value")
 
-	value, locked, err := c.getCachedValueOrLock(ctx, key, c.opts, false)
+	value, locked, err := c.getCachedValueOrLock(ctx, key, c.opts, false, false)
 
 	assert.NoError(t, err)
-	assert.False(t, locked)
+	assert.Equal(t, LockStatusUnlocked, locked)
 	assert.Equal(t, []byte("valid-value"), value)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
@@ -139,10 +139,10 @@ func Test_getCachedValueOrLock_LockWaitExpired(t *testing.T) {
 
 	mock.ExpectGet(key).SetVal("")
 
-	value, locked, err := c.getCachedValueOrLock(ctx, key, c.opts, false)
+	value, locked, err := c.getCachedValueOrLock(ctx, key, c.opts, false, false)
 
 	assert.Error(t, err)
-	assert.False(t, locked)
+	assert.Equal(t, LockStatusLockFailed, locked)
 	assert.Nil(t, value)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
@@ -168,10 +168,10 @@ func Test_getCachedValueOrLock_LockContextExpired(t *testing.T) {
 
 	mock.ExpectGet(key).SetVal("")
 
-	value, locked, err := c.getCachedValueOrLock(ctx, key, c.opts, false)
+	value, locked, err := c.getCachedValueOrLock(ctx, key, c.opts, false, false)
 
 	assert.Error(t, err)
-	assert.False(t, locked)
+	assert.Equal(t, LockStatusLockFailed, locked)
 	assert.Nil(t, value)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
@@ -302,7 +302,8 @@ func Test_SaveToCache_Success(t *testing.T) {
 
 	mock.ExpectSet(key, value, opts.TTL).SetVal("OK")
 
-	c.saveToCache(ctx, key, value, opts)
+	err := c.saveToCache(ctx, key, value, opts)
+	assert.NoError(t, err)
 
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
@@ -328,9 +329,8 @@ func Test_SaveToCache_Error(t *testing.T) {
 
 	mock.ExpectSet(key, value, opts.TTL).SetErr(errors.New("redis error"))
 
-	assert.Panics(t, func() {
-		c.saveToCache(ctx, key, value, opts)
-	})
+	err := c.saveToCache(ctx, key, value, opts)
+	assert.Error(t, err)
 
 	assert.NoError(t, mock.ExpectationsWereMet())
 }

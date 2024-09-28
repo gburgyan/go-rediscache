@@ -3,6 +3,7 @@ package rediscache
 import (
 	"context"
 	"fmt"
+	"github.com/alicebob/miniredis/v2"
 	"github.com/gburgyan/go-timing"
 	"github.com/go-redis/redis/v8"
 	"github.com/go-redis/redismock/v8"
@@ -34,12 +35,14 @@ func (n nullEncryptor) Decrypt(data []byte) ([]byte, error) {
 }
 
 func TestCache1(t *testing.T) {
+	mini := miniredis.RunT(t)
+
 	ctx := context.Background()
 	timingCtx := timing.Root(ctx)
 
 	// Open a connection to Redis locally
 	redisConnection := redis.NewClient(&redis.Options{
-		Addr: "localhost:6379",
+		Addr: mini.Addr(),
 	})
 
 	c := NewRedisCache(ctx, redisConnection, CacheOptions{

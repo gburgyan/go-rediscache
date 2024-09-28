@@ -2,6 +2,7 @@ package rediscache
 
 import (
 	"bytes"
+	"context"
 	"encoding/binary"
 	"errors"
 	"io"
@@ -80,10 +81,16 @@ func serializeResultsToCache(opts CacheOptions, results []reflect.Value, handler
 	}
 	parts[len(handlers)] = marshalBinary
 
-	return combineBytes(parts)
+	plaintext, err := combineBytes(parts)
+	if err != nil {
+		return nil, err
+	}
+	return handleEncryption(opts, plaintext)
 }
 
-func deserializeCacheToResults(value []byte, out []valueHandler) ([]reflect.Value, time.Time, error) {
+func deserializeCacheToResults(ctx context.Context, opts CacheOptions, value []byte, out []valueHandler) ([]reflect.Value, time.Time, error) {
+	handleDecryption(ctx, opts, value)
+
 	parts, err := splitBytes(value)
 	if err != nil {
 		return nil, time.Time{}, err

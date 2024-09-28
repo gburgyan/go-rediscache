@@ -51,8 +51,6 @@ result, err := cachedUserInfoFunc(ctx, "User42")
 
 If the user's info was already cached, it will be returned without calling the function. Otherwise, the function is called and the results will be saved.
 
-
-
 ## Requirements
 
 The requirements for introducing `go-rediscache` to your system are that the parameters of the function can be used to generate a hash. The function should be stable, such that invoking the same function for the same parameters should generate identical (or identical semantically) results. The results also need to be able to be marshaled and unmarshalled from to a `[]byte`.
@@ -209,6 +207,66 @@ The looping that occurs in the "check Redis for cached results" works thusly:
 
 All of this is handled by `getCachedValueOrLock()` in `redis.go`.
 
+# Slices
+
+There are times when you need to get a bunch of things, and you would like to have them cached. We can handle those as well!
+
+There are two classes of functions that we can implicitly parallelize:
+
+1. `func(ctx context.Context, in IN) (OUT, error)`
+2. `func(ctx context.Context, in []IN) ([]OUT, error)`
+
+## Single Input Functions
+
+The first one is very easy as all we do is basically a convenience function that runs all of the cache lookups in parallel.
+
+Calling `CacheBulk` or `CacheBulkOpts` with a function in the form of `func(ctx context.Context, in IN) (OUT, error)` will return a function that handles caching in the form of `func(ctx context.Context, in []IN) ([]OUT, error)`
+
+Each of these lookups are handled on their own goroutine. If any of the underlying cached functions returns an error, those will be collected in a `SliceError` object.
+
+## Slice Input Functions
+
+Functions in the form `func(ctx context.Context, in []IN) ([]OUT, error)` are handled by `CacheBulkSlice` and `CacheBulkSliceOpts`. The results of each of the `IN` are cached individually.
+
+This is a more complicated as some of the results of the inputs may already be cached, or already being processed by another call. This is smart enough to look at the global state of affairs and behave appropriately.
+
+Consider the case of:
+
+```go
+func FetchSomething(ctx context.Context, id []string) ([]string, error) {
+	// Each of the result []string need to correspond 1 to 1 with the inputs
+}
+
+cachedFunc := rediscache.CacheBulkSlice(cache, FetchSomething)
+
+results, err := cachedFunc(ctx, []string{"Cached", "Locked", "Miss"})
+```
+
+Each of the inputs are stored in the cached individually, so they can be in different states:
+
+* **Already cached** - We already have the results for this input, so we don't have to call the underlying function to fetch a new instance of this.
+* **Locked** - Another process is already busy fetching it. So we don't need to do additional work to get this value, we'll wait for the other process to complete and write the results to the cache.
+* **Cache miss** - We don't have the value, and no one else is working on it. All the cache misses will be bundled together when the backing function is called.
+
+This is based on the idea that the cost of calling the backing function scales with the number of input values, which is normally the case. There _are_ cases where it makes sense to call the backing function if there are any cache misses. If the cache filling cost doesn't scale with input count, then you can set the `RefreshEntireBatch` option. In this case, if there are any cache misses, then the entirety of the input values will be refreshed. In the case where all the inputs are already locked, we'll simply wait for the other process that's already calling the function to finish.
+
+There is also error handling in cases where there is a cache error (i.e. cannot be deserialized) or a lock timeout. In either case, the backing function will be called as a one-off in either case.
+
+## Error Reporting
+
+Both types of slice caching functions return a single error object. If the error originates from the backing function, then it'll return a `SliceError` object to aggregate the errors from the function calls. 
+
+```go
+type SliceError struct {
+	Errors []error
+}
+
+type SliceItemError struct {
+    Index int
+    Err   error
+}
+```
+
 # Options
 
 ## Configuration Options
@@ -225,6 +283,7 @@ The `CacheOptions` struct allows you to customize the behavior of the cache:
 - `EnableLogging`: If set to `true`, the cache will log information about the cache hits and misses. Default is `false`.
 - `RefreshPercentage`: The percentage of the TTL that will be used to refresh the cache. Default is 0.0, which means that the cache will not be refreshed. If set to 0.8, the cache will be refreshed 80% of the way through the TTL. This is useful for ensuring that the cache is always up-to-date and that the cache is not stale. In case of a refresh, it will be done in the background go routine and the old value will be returned to the caller.
 - `RefreshAlpha`: The alpha value used to calculate the probability of refreshing the cache entry. The time range between when a cache entry is eligible for refresh and the TTL-LockTTL is scaled to the range [0, 1] and called x. The probability of refreshing the cache entry is calculated as x^(alpha-1). If RefreshAlpha is 1 or less, the cache entry will be refreshed immediately when it is eligible for refresh. A higher alpha value will make it less likely that the cache entry will be refreshed. A value of 0 will inherit the default alpha for the cache. An alpha of two will be a linear ramp of probabilities from 0 to 1. Default is 1 which will immediately refresh the cache upon it being eligible.
+- `RefreshEntireBatch`: When calling the `CacheBulkSlice`, if there are any cache misses, will trigger refreshing the entire batch. 
 
 Normally `LockWait` and `LockTTL` should be set to the same value. If `LockWait` times out before the `LockTTL` expires, an additional call to the backing function will be made.
 

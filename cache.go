@@ -176,18 +176,18 @@ func handleEncryption(funcOpts CacheOptions, serialized []byte) ([]byte, error) 
 // Returns:
 // - A byte slice representing the decrypted value, or the original cached value if decryption is not needed or fails.
 // - An error if the decryption fails.
-func handleDecryption(ctx context.Context, funcOpts CacheOptions, doTiming bool, cachedValue []byte) ([]byte, error) {
+func handleDecryption(ctx context.Context, funcOpts CacheOptions, cachedValue []byte) ([]byte, error) {
 	if funcOpts.EncryptionHandler == nil {
 		return cachedValue, nil
 	}
 
 	var decryptionComplete timing.Complete
-	if doTiming {
+	if funcOpts.EnableTiming {
 		_, decryptionComplete = timing.Start(ctx, "decrypt")
 	}
 	// Decrypt the value
 	decrypted, err := funcOpts.EncryptionHandler.Decrypt(cachedValue)
-	if doTiming {
+	if funcOpts.EnableTiming {
 		decryptionComplete()
 	}
 	if err != nil {
@@ -294,27 +294,23 @@ func (cfc cacheFunctionConfig) cacher(args []reflect.Value) []reflect.Value {
 
 	// If found, return the value
 	if cachedValue != nil {
-		cachedValue, err = handleDecryption(ctx, cfc.funcOpts, doTiming, cachedValue)
-
-		if err == nil {
-			// Deserialize the value
-			var complete timing.Complete
-			if doTiming {
-				_, complete = timing.Start(ctx, "deserialize")
-			}
-			results, lastSaveTime, err := deserializeCacheToResults(cachedValue, cfc.outputValueHandlers)
-			if doTiming {
-				complete()
-			}
-			if err == nil {
-				cfc.handleBackgroundRefresh(ctx, key, args, lastSaveTime)
-				return results
-			}
-			// If we got an error deserializing, we can still
-			// call the main function and cache the result if
-			// it succeeds.
-			log.Printf("Error deserializing cache value: %v\n", err)
+		// Deserialize the value
+		var complete timing.Complete
+		if doTiming {
+			_, complete = timing.Start(ctx, "deserialize")
 		}
+		results, lastSaveTime, err := deserializeCacheToResults(ctx, cfc.funcOpts, cachedValue, cfc.outputValueHandlers)
+		if doTiming {
+			complete()
+		}
+		if err == nil {
+			cfc.handleBackgroundRefresh(ctx, key, args, lastSaveTime)
+			return results
+		}
+		// If we got an error deserializing, we can still
+		// call the main function and cache the result if
+		// it succeeds.
+		log.Printf("Error deserializing cache value: %v\n", err)
 	}
 
 	callResults, err := callBackingFunction(ctx, cfc.realFunction, args, doTiming)
@@ -345,15 +341,9 @@ func (cfc cacheFunctionConfig) cacher(args []reflect.Value) []reflect.Value {
 			if err != nil {
 				isError = true
 			} else {
-				serialized, err = handleEncryption(cfc.funcOpts, serialized)
-
-				if err == nil {
-					// Saving to the cache does an unlock implicitly.
-					err := cfc.cache.saveToCache(ctx, key, serialized, cfc.funcOpts)
-					if err != nil {
-						isError = true
-					}
-				} else {
+				// Saving to the cache does an unlock implicitly.
+				err := cfc.cache.saveToCache(ctx, key, serialized, cfc.funcOpts)
+				if err != nil {
 					isError = true
 				}
 			}

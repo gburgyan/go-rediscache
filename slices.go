@@ -283,7 +283,7 @@ func handleAlreadyLockedItems[IN any, OUT any](ctx context.Context, lockedItems 
 		value, status, err := functionConfig.cache.getCachedValueOrLock(ctx, item.key, funcOpts, funcOpts.EnableTiming, false)
 		item.status = status
 		if len(value) > 0 {
-			toResults, _, err := deserializeCacheToResults(value, functionConfig.outputValueHandlers)
+			toResults, _, err := deserializeCacheToResults(ctx, funcOpts, value, functionConfig.outputValueHandlers)
 			return BulkReturn[OUT]{Result: toResults[0].Interface().(OUT), Error: err}, nil
 		}
 		// We waited for the lock to get replaced with a value, but it didn't happen.
@@ -361,7 +361,7 @@ func handleCachedItems[IN, OUT any](ctx context.Context, cachedItems []*keyStatu
 	// Iterate over each cached item
 	for _, item := range cachedItems {
 		// Deserialize the cached value into results
-		toResults, _, err := deserializeCacheToResults(item.cachedValue, functionConfig.outputValueHandlers)
+		toResults, _, err := deserializeCacheToResults(ctx, funcOpts, item.cachedValue, functionConfig.outputValueHandlers)
 		if err != nil {
 			out, err := runSingleValueAndCache(ctx, item, f, funcOpts, functionConfig)
 			item.resultVal = out

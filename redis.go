@@ -90,11 +90,12 @@ func (r *RedisCache) getCachedValueOrLock(ctx context.Context, key string, opts 
 				// Lock successfully acquired
 				return nil, LockStatusLockAcquired, nil
 			}
-			if skipSpinning {
-				return nil, LockStatusLockAcquired, nil
-			}
 			// In case there is an error while setting the lock, this is
 			// likely due to a race with another process. Retry.
+		}
+
+		if skipSpinning {
+			return nil, LockStatusLockFailed, nil
 		}
 
 		spins++

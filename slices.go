@@ -90,7 +90,7 @@ func CacheBulkSliceOpts[IN any, OUT any](c *RedisCache, f CtxSliceFunc[IN, OUT],
 			initialLockComplete()
 		}
 
-		var items, cachedItems, alreadyLocked, lockedItems, alreadyLockedItems []*keyStatus[IN, OUT]
+		var items, cachedItems, alreadyLocked, lockedItems []*keyStatus[IN, OUT]
 
 		// Categorize key statuses
 		for i, item := range keyStatuses {
@@ -106,7 +106,7 @@ func CacheBulkSliceOpts[IN any, OUT any](c *RedisCache, f CtxSliceFunc[IN, OUT],
 			case status.status == LockStatusLockAcquired:
 				lockedItems = append(lockedItems, &status)
 			case status.status == LockStatusLockFailed:
-				alreadyLockedItems = append(alreadyLockedItems, &status)
+				alreadyLocked = append(alreadyLocked, &status)
 			default:
 				panic("unexpected lock status")
 			}

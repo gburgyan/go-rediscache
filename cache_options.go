@@ -111,4 +111,7 @@ func (co *CacheOptions) overlayCacheOptions(base CacheOptions) {
 	if co.now == nil {
 		co.now = base.now
 	}
+	if co.RefreshEntireBatch == false {
+		co.RefreshEntireBatch = base.RefreshEntireBatch
+	}
 }

@@ -70,19 +70,6 @@ func TestSliceReal(t *testing.T) {
 	fmt.Println(timingCtx.String())
 }
 
-func runAllAndWait(funcs ...func()) {
-	done := make(chan struct{})
-	for _, f := range funcs {
-		go func(f func()) {
-			f()
-			done <- struct{}{}
-		}(f)
-	}
-	for range funcs {
-		<-done
-	}
-}
-
 func TestSliceMultiAccess_LockWait(t *testing.T) {
 	mini := miniredis.RunT(t)
 

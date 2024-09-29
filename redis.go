@@ -7,15 +7,20 @@ import (
 	"github.com/gburgyan/go-timing"
 	"github.com/go-redis/redis/v8"
 	"reflect"
+	"sync"
 	"time"
 )
 
+// RedisCache is a wrapper around a Redis client that provides caching functionality with various configuration options.
 type RedisCache struct {
 	defaultContext    context.Context
 	connection        *redis.Client
 	typeHandlers      map[reflect.Type]valueHandler
 	interfaceHandlers map[reflect.Type]valueHandler
 	opts              CacheOptions
+
+	mu             sync.Mutex
+	contentWaiters map[string][]chan []byte
 }
 
 type LockWaitExpiredError struct {
@@ -26,20 +31,34 @@ func (e *LockWaitExpiredError) Error() string {
 	return e.message
 }
 
+// LockStatus represents the status of a lock operation.
 type LockStatus int
 
 const (
+	// LockStatusUnlocked indicates that the lock is not held.
 	LockStatusUnlocked LockStatus = iota
+
+	// LockStatusLockAcquired indicates that the lock was successfully acquired.
 	LockStatusLockAcquired
+
+	// LockStatusLockFailed indicates that the lock acquisition failed.
 	LockStatusLockFailed
+
+	// LockStatusError indicates that an error occurred during the lock operation.
 	LockStatusError
 )
 
+// LockMode represents the mode of locking behavior.
 type LockMode int
 
 const (
+	// LockModeDefault is the default locking mode.
 	LockModeDefault LockMode = iota
+
+	// LockModeSkipSpinning skips the spinning phase of the lock.
 	LockModeSkipSpinning
+
+	// LockModeSkipInitial skips the initial lock attempt.
 	LockModeSkipInitial
 )
 
@@ -62,6 +81,11 @@ func (r *RedisCache) getCachedValueOrLock(ctx context.Context, key string, opts 
 		timingCtx, complete = timing.Start(ctx, "redis")
 		defer complete()
 	}
+
+	waiterChannel := make(chan []byte)
+	defer close(waiterChannel)
+	unregisterWaiter := r.registerWaiterChannel(key, waiterChannel)
+	defer unregisterWaiter()
 
 	lockWaitExpire := time.After(opts.LockWait)
 	spins := 0
@@ -135,31 +159,17 @@ func (r *RedisCache) getCachedValueOrLock(ctx context.Context, key string, opts 
 				timingCtx.AddDetails("lock-wait-expired", true)
 			}
 			return nil, LockStatusLockFailed, &LockWaitExpiredError{}
+		case val := <-waiterChannel:
+			if doTiming {
+				timingCtx.AddDetails("in-proc-val", true)
+			}
+			if len(val) > 0 {
+				return val, LockStatusUnlocked, nil
+			}
 		case <-time.After(opts.LockRetry):
 			continue
 		}
 	}
-}
-
-func (r *RedisCache) getCachedValues(ctx context.Context, key []string, doTiming bool) ([][]byte, error) {
-	// Check each of the keys in the cache and return their values if they exist.
-	values := make([][]byte, len(key))
-	if doTiming {
-		_, complete := timing.Start(ctx, "GetCachedValues")
-		defer complete()
-	}
-	cmdResult := r.connection.MGet(ctx, key...)
-	if cmdResult.Err() != nil {
-		return nil, cmdResult.Err()
-	}
-	for i, result := range cmdResult.Val() {
-		if result == nil {
-			values[i] = nil
-			continue
-		}
-		values[i] = []byte(result.(string))
-	}
-	return values, nil
 }
 
 // unlockCache attempts to unlock a cache entry by deleting the key if it is a 0-byte value.
@@ -208,6 +218,7 @@ func (r *RedisCache) unlockCache(ctx context.Context, key string) error {
 // Panics:
 // - If the operation to set the value in the cache fails.
 func (r *RedisCache) saveToCache(ctx context.Context, key string, value []byte, opts CacheOptions) error {
+	r.notifyWaiters(key, value)
 	set := r.connection.Set(ctx, key, value, opts.TTL)
 	if set.Err() != nil {
 		return fmt.Errorf("failed to save value to cache: %w", set.Err())
@@ -239,4 +250,55 @@ func (r *RedisCache) lockRefresh(ctx context.Context, key string, opts CacheOpti
 func (r *RedisCache) unlockRefresh(ctx context.Context, key string, opts CacheOptions) {
 	fullKey := key + "-refresh"
 	r.connection.Del(ctx, fullKey)
+}
+
+// registerWaiterChannel registers a channel to wait for a specific cache key and returns a function to unregister the channel.
+//
+// Parameters:
+// - key: The cache key to wait for.
+// - ch: The channel to register.
+//
+// Returns:
+// - A function to unregister the channel.
+func (r *RedisCache) registerWaiterChannel(key string, ch chan []byte) func() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.contentWaiters == nil {
+		r.contentWaiters = make(map[string][]chan []byte)
+	}
+	r.contentWaiters[key] = append(r.contentWaiters[key], ch)
+
+	// return unlocker function
+	return func() {
+		r.mu.Lock()
+		defer r.mu.Unlock()
+		if chs, ok := r.contentWaiters[key]; ok {
+			for i, c := range chs {
+				if c == ch {
+					r.contentWaiters[key] = append(chs[:i], chs[i+1:]...)
+					break
+				}
+			}
+			if len(r.contentWaiters[key]) == 0 {
+				delete(r.contentWaiters, key)
+			}
+		}
+	}
+}
+
+// notifyWaiters sends the given value to all registered channels waiting for the specified cache key
+// and then removes the channels from the waiters list.
+//
+// Parameters:
+// - key: The cache key for which the waiters are registered.
+// - value: The byte slice to send to the registered channels.
+func (r *RedisCache) notifyWaiters(key string, value []byte) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if chs, ok := r.contentWaiters[key]; ok {
+		for _, ch := range chs {
+			ch <- value
+		}
+		delete(r.contentWaiters, key)
+	}
 }

@@ -34,7 +34,7 @@ func (n nullEncryptor) Decrypt(data []byte) ([]byte, error) {
 	return data, nil
 }
 
-func TestCache1(t *testing.T) {
+func TestCache_HappyCase(t *testing.T) {
 	mini := miniredis.RunT(t)
 
 	ctx := context.Background()
@@ -67,6 +67,68 @@ func TestCache1(t *testing.T) {
 	assert.Equal(t, "test", s.Value)
 
 	fmt.Println(timingCtx.String())
+}
+
+func TestCache_MultipleCalls(t *testing.T) {
+	mini := miniredis.RunT(t)
+
+	ctx := context.Background()
+	timingCtx := timing.Root(ctx)
+
+	// Open a connection to Redis locally
+	redisConnection := redis.NewClient(&redis.Options{
+		Addr: mini.Addr(),
+	})
+
+	c := NewRedisCache(ctx, redisConnection, CacheOptions{
+		TTL:          time.Minute,
+		LockTTL:      time.Minute,
+		LockWait:     time.Second * 10,
+		LockRetry:    time.Millisecond * 200,
+		KeyPrefix:    "GoCache-",
+		EnableTiming: true,
+	})
+
+	callCount := 0
+	f := func(ctx context.Context, s string) (resultSerializable, error) {
+		callCount++
+		time.Sleep(time.Millisecond * 500)
+		return resultSerializable{s}, nil
+	}
+
+	cf := Cache(c, f)
+
+	startTime := time.Now()
+
+	runAllAndWait(
+		func() {
+			fTiming, complete := timing.Start(timingCtx, "func1")
+			defer complete()
+
+			s, err := cf(fTiming, "test")
+			assert.NoError(t, err)
+			assert.Equal(t, "test", s.Value)
+		},
+		func() {
+			time.Sleep(time.Millisecond * 100)
+			fTiming, complete := timing.Start(timingCtx, "func2")
+			defer complete()
+
+			s, err := cf(fTiming, "test")
+			assert.NoError(t, err)
+			assert.Equal(t, "test", s.Value)
+		},
+	)
+
+	elapsed := time.Since(startTime)
+
+	fmt.Println(timingCtx.String())
+	assert.Equal(t, 1, callCount)
+
+	// This is to ensure that the lock waiter channel is working correctly. The save from the first
+	// call should immediately be available to the second call via the waiter channel. Without this
+	// working correctly, it would take an extra spin and take at least 600 ms.
+	assert.InDelta(t, 500, elapsed.Milliseconds(), 50)
 }
 
 func TestFullIntegration(t *testing.T) {

@@ -47,14 +47,6 @@ var errorType = reflect.TypeOf((*error)(nil)).Elem()
 var contextType = reflect.TypeOf((*context.Context)(nil)).Elem()
 var valueType = reflect.TypeOf((*reflect.Value)(nil)).Elem()
 
-type RedisCache struct {
-	defaultContext    context.Context
-	connection        *redis.Client
-	typeHandlers      map[reflect.Type]valueHandler
-	interfaceHandlers map[reflect.Type]valueHandler
-	opts              CacheOptions
-}
-
 // Serializer is a function type that defines a method for serializing data.
 // It takes an input of any type and returns a byte slice and an error.
 //

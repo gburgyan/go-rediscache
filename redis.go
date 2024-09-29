@@ -6,8 +6,17 @@ import (
 	"fmt"
 	"github.com/gburgyan/go-timing"
 	"github.com/go-redis/redis/v8"
+	"reflect"
 	"time"
 )
+
+type RedisCache struct {
+	defaultContext    context.Context
+	connection        *redis.Client
+	typeHandlers      map[reflect.Type]valueHandler
+	interfaceHandlers map[reflect.Type]valueHandler
+	opts              CacheOptions
+}
 
 type LockWaitExpiredError struct {
 	message string
@@ -26,6 +35,14 @@ const (
 	LockStatusError
 )
 
+type LockMode int
+
+const (
+	LockModeDefault LockMode = iota
+	LockModeSkipSpinning
+	LockModeSkipInitial
+)
+
 // getCachedValueOrLock attempts to retrieve a value from the cache or acquire a lock if the value is not present.
 //
 // Parameters:
@@ -38,7 +55,7 @@ const (
 // - value: A byte slice representing the cached value, or nil if the value is not present.
 // - locked: A boolean indicating whether a lock was successfully acquired.
 // - err: An error if the operation fails.
-func (r *RedisCache) getCachedValueOrLock(ctx context.Context, key string, opts CacheOptions, doTiming bool, skipSpinning bool) (value []byte, locked LockStatus, err error) {
+func (r *RedisCache) getCachedValueOrLock(ctx context.Context, key string, opts CacheOptions, doTiming bool, mode LockMode) (value []byte, locked LockStatus, err error) {
 	var timingCtx *timing.Context
 	if doTiming {
 		var complete timing.Complete
@@ -49,53 +66,57 @@ func (r *RedisCache) getCachedValueOrLock(ctx context.Context, key string, opts 
 	lockWaitExpire := time.After(opts.LockWait)
 	spins := 0
 	for {
-		// Attempt to get the value from the cache
-		var getComplete timing.Complete
-		if doTiming {
-			_, getComplete = timing.Start(timingCtx, "get")
-		}
-		getResult := r.connection.Get(ctx, key)
-		val, err := getResult.Bytes()
-		if doTiming {
-			getComplete()
-		}
+		if mode != LockModeSkipInitial {
+			// Attempt to get the value from the cache
+			var getComplete timing.Complete
+			if doTiming {
+				_, getComplete = timing.Start(timingCtx, "get")
+			}
+			getResult := r.connection.Get(ctx, key)
+			val, err := getResult.Bytes()
+			if doTiming {
+				getComplete()
+			}
 
-		if err == nil {
-			if len(val) > 0 {
-				if doTiming {
-					timingCtx.AddDetails("cache-hit", true)
+			if err == nil {
+				if len(val) > 0 {
+					if doTiming {
+						timingCtx.AddDetails("cache-hit", true)
+					}
+					return val, LockStatusUnlocked, nil
 				}
-				return val, LockStatusUnlocked, nil
-			}
-		} else {
-			if !errors.Is(err, redis.Nil) {
-				if doTiming {
-					timingCtx.AddDetails("cache-error", true)
+			} else {
+				if !errors.Is(err, redis.Nil) {
+					if doTiming {
+						timingCtx.AddDetails("cache-error", true)
+					}
+					return nil, LockStatusError, err
 				}
-				return nil, LockStatusError, err
+				// The key does not exist in the cache, attempt to lock
+				if doTiming {
+					timingCtx.AddDetails("cache-miss", true)
+				}
+				var lockComplete timing.Complete
+				if doTiming {
+					_, lockComplete = timing.Start(timingCtx, "lock")
+				}
+				ok, err := r.connection.SetNX(ctx, key, "", opts.LockTTL).Result()
+				if doTiming {
+					lockComplete()
+				}
+				if ok && err == nil {
+					// Lock successfully acquired
+					return nil, LockStatusLockAcquired, nil
+				}
+				// In case there is an error while setting the lock, this is
+				// likely due to a race with another process. Retry.
 			}
-			// The key does not exist in the cache, attempt to lock
-			if doTiming {
-				timingCtx.AddDetails("cache-miss", true)
-			}
-			var lockComplete timing.Complete
-			if doTiming {
-				_, lockComplete = timing.Start(timingCtx, "lock")
-			}
-			ok, err := r.connection.SetNX(ctx, key, "", opts.LockTTL).Result()
-			if doTiming {
-				lockComplete()
-			}
-			if ok && err == nil {
-				// Lock successfully acquired
-				return nil, LockStatusLockAcquired, nil
-			}
-			// In case there is an error while setting the lock, this is
-			// likely due to a race with another process. Retry.
 		}
-
-		if skipSpinning {
+		if mode == LockModeSkipSpinning {
 			return nil, LockStatusLockFailed, nil
+		}
+		if mode == LockModeSkipInitial {
+			mode = LockModeDefault
 		}
 
 		spins++

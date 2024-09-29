@@ -115,7 +115,7 @@ func CacheBulkSliceOpts[IN any, OUT any](c *RedisCache, f CtxSliceFunc[IN, OUT],
 		// Run the parallel function to get key statuses
 		keyStatuses := parallelRun(initialLockCtx, in, func(ctx context.Context, input IN) (keyStatus[IN, OUT], error) {
 			key := functionConfig.keyForArgs([]reflect.Value{reflect.ValueOf(input)})
-			value, locked, err := c.getCachedValueOrLock(ctx, key, funcOpts, doTiming, true)
+			value, locked, err := c.getCachedValueOrLock(ctx, key, funcOpts, doTiming, LockModeSkipSpinning)
 			return keyStatus[IN, OUT]{key: key, cachedValue: value, status: locked, input: input}, err
 		})
 
@@ -321,7 +321,7 @@ func handleAlreadyLockedItems[IN any, OUT any](ctx context.Context, lockedItems 
 	}
 
 	lockedResults := parallelRun(ctx, lockedItems, func(ctx context.Context, item *keyStatus[IN, OUT]) (BulkReturn[OUT], error) {
-		value, status, err := functionConfig.cache.getCachedValueOrLock(ctx, item.key, funcOpts, funcOpts.EnableTiming, false)
+		value, status, err := functionConfig.cache.getCachedValueOrLock(ctx, item.key, funcOpts, funcOpts.EnableTiming, LockModeDefault)
 		item.status = status
 		if len(value) > 0 {
 			toResults, _, err := deserializeCacheToResults(ctx, funcOpts, value, functionConfig.outputValueHandlers)

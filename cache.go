@@ -286,7 +286,7 @@ func (cfc cacheFunctionConfig) cacher(args []reflect.Value) []reflect.Value {
 	key := cfc.keyForArgs(args)
 
 	// Look up key in cache
-	cachedValue, lockStatus, err := cfc.cache.getCachedValueOrLock(ctx, key, cfc.funcOpts, doTiming, false)
+	cachedValue, lockStatus, err := cfc.cache.getCachedValueOrLock(ctx, key, cfc.funcOpts, doTiming, LockModeDefault)
 	if err != nil {
 		// If there was an error, call the main function and return the callResults
 		// and try to save the result to the cache in the background anyway.

@@ -3,9 +3,22 @@ package rediscache
 import "time"
 
 type CacheOptions struct {
-	// TTL is the time-to-live for the cache entry. If TTL is 0, the cache
-	// entry will never expire in Redis.
+	// TTL is the time-to-live for the cache entry. If TTL is 0, the default TTL
+	// will be used. This is the time that the cache entry will be considered fresh
+	// and will be used before it is refreshed.
 	TTL time.Duration
+
+	// RedisTTL is the time-to-live for the cache entry in Redis. Typically this
+	// should be the same as TTL. If RedisTTL is 0, the configured TTL will be used.
+	// This can be used with UpdateRedisTTLOnUse to ensure that the cache entry is
+	// kept around as long as it is used.
+	RedisTTL time.Duration
+
+	// UpdateRedisTTLOnUse is a flag that indicates whether the TTL of the Redis cache
+	// entry should be updated when the cache entry is used. This is useful for
+	// ensuring that the cache entry is always fresh and fetching new data before
+	// the cache entry expires. This attribute does not inherit.
+	UpdateRedisTTLOnUse bool
 
 	// RefreshPercentage expresses the percentage of the TTL at which the cache
 	// entry should be refreshed. If RefreshPercentage is 1, the cache entry will
@@ -65,16 +78,18 @@ type CacheOptions struct {
 }
 
 var defaultCacheOptions = CacheOptions{
-	TTL:               5 * time.Minute,
-	LockTTL:           10 * time.Second,
-	LockWait:          10 * time.Second,
-	LockRetry:         100 * time.Millisecond,
-	KeyPrefix:         "GoCache-",
-	EnableTiming:      false,
-	EncryptionHandler: nil,
-	RefreshPercentage: 0.8,
-	RefreshAlpha:      1,
-	now:               time.Now,
+	TTL:                 5 * time.Minute,
+	RedisTTL:            5 * time.Minute,
+	UpdateRedisTTLOnUse: false,
+	LockTTL:             10 * time.Second,
+	LockWait:            10 * time.Second,
+	LockRetry:           100 * time.Millisecond,
+	KeyPrefix:           "GoCache-",
+	EnableTiming:        false,
+	EncryptionHandler:   nil,
+	RefreshPercentage:   0.8,
+	RefreshAlpha:        1,
+	now:                 time.Now,
 }
 
 func (co *CacheOptions) overlayCacheOptions(base CacheOptions) {
@@ -83,6 +98,9 @@ func (co *CacheOptions) overlayCacheOptions(base CacheOptions) {
 	}
 	if co.TTL == 0 {
 		co.TTL = base.TTL
+	}
+	if co.RedisTTL == 0 {
+		co.RedisTTL = co.TTL
 	}
 	if co.LockTTL == 0 {
 		co.LockTTL = base.LockTTL

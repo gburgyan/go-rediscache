@@ -96,7 +96,12 @@ func (r *RedisCache) getCachedValueOrLock(ctx context.Context, key string, opts 
 			if doTiming {
 				_, getComplete = timing.Start(timingCtx, "get")
 			}
-			getResult := r.connection.Get(ctx, key)
+			var getResult *redis.StringCmd
+			if opts.UpdateRedisTTLOnUse {
+				getResult = r.connection.GetEx(ctx, key, opts.RedisTTL)
+			} else {
+				getResult = r.connection.Get(ctx, key)
+			}
 			val, err := getResult.Bytes()
 			if doTiming {
 				getComplete()
@@ -219,7 +224,7 @@ func (r *RedisCache) unlockCache(ctx context.Context, key string) error {
 // - If the operation to set the value in the cache fails.
 func (r *RedisCache) saveToCache(ctx context.Context, key string, value []byte, opts CacheOptions) error {
 	r.notifyWaiters(key, value)
-	set := r.connection.Set(ctx, key, value, opts.TTL)
+	set := r.connection.Set(ctx, key, value, opts.RedisTTL)
 	if set.Err() != nil {
 		return fmt.Errorf("failed to save value to cache: %w", set.Err())
 	}

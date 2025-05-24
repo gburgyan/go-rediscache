@@ -331,7 +331,13 @@ func (cfc cacheFunctionConfig) cacher(args []reflect.Value) []reflect.Value {
 			}
 		}()
 
-		backgroundCtx := context.Background()
+		// Use a timeout context - use 2x TTL or 30 seconds, whichever is larger
+		timeout := cfc.funcOpts.TTL * 2
+		if timeout < 30*time.Second {
+			timeout = 30 * time.Second
+		}
+		backgroundCtx, cancel := context.WithTimeout(context.Background(), timeout)
+		defer cancel()
 
 		var serialized []byte
 		if !isError {
@@ -342,7 +348,7 @@ func (cfc cacheFunctionConfig) cacher(args []reflect.Value) []reflect.Value {
 				isError = true
 			} else {
 				// Saving to the cache does an unlock implicitly.
-				err := cfc.cache.saveToCache(ctx, key, serialized, cfc.funcOpts)
+				err := cfc.cache.saveToCache(backgroundCtx, key, serialized, cfc.funcOpts)
 				if err != nil {
 					isError = true
 				}
@@ -405,7 +411,13 @@ func (cfc cacheFunctionConfig) doBackgroundRefresh(ctx context.Context, key stri
 			log.Printf("Stack trace: %s\n", buf[:stackSize])
 		}
 	}()
-	backgroundCtx := context.Background()
+	// Use a timeout context - use 2x TTL or 30 seconds, whichever is larger
+	timeout := cfc.funcOpts.TTL * 2
+	if timeout < 30*time.Second {
+		timeout = 30 * time.Second
+	}
+	backgroundCtx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
 	// Lock the cache
 	err := cfc.cache.lockRefresh(backgroundCtx, key, cfc.funcOpts)
 	if err != nil {
@@ -416,7 +428,7 @@ func (cfc cacheFunctionConfig) doBackgroundRefresh(ctx context.Context, key stri
 	}()
 
 	// Call the main function
-	callResults, err := callBackingFunction(ctx, cfc.realFunction, args, false)
+	callResults, err := callBackingFunction(backgroundCtx, cfc.realFunction, args, false)
 	if err != nil {
 		return
 	}
@@ -433,7 +445,7 @@ func (cfc cacheFunctionConfig) doBackgroundRefresh(ctx context.Context, key stri
 	}
 
 	// Save to the cache (we can ignore the error here)
-	_ = cfc.cache.saveToCache(ctx, key, serialized, cfc.funcOpts)
+	_ = cfc.cache.saveToCache(backgroundCtx, key, serialized, cfc.funcOpts)
 }
 
 // shouldPreRefresh determines whether the cache entry should be pre-refreshed based on the saved time and cache options.

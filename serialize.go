@@ -89,7 +89,10 @@ func serializeResultsToCache(opts CacheOptions, results []reflect.Value, handler
 }
 
 func deserializeCacheToResults(ctx context.Context, opts CacheOptions, value []byte, out []valueHandler) ([]reflect.Value, time.Time, error) {
-	handleDecryption(ctx, opts, value)
+	value, err := handleDecryption(ctx, opts, value)
+	if err != nil {
+		return nil, time.Time{}, err
+	}
 
 	parts, err := splitBytes(value)
 	if err != nil {

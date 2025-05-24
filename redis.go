@@ -200,7 +200,9 @@ func (r *RedisCache) unlockCache(ctx context.Context, key string) error {
 		}
 
 		// Delete the key
-		r.connection.Del(ctx, key)
+		if err := r.connection.Del(ctx, key).Err(); err != nil {
+			return err
+		}
 		return nil
 	}, key)
 
@@ -297,7 +299,12 @@ func (r *RedisCache) notifyWaiters(key string, value []byte) {
 	defer r.mu.Unlock()
 	if chs, ok := r.contentWaiters[key]; ok {
 		for _, ch := range chs {
-			ch <- value
+			select {
+			case ch <- value:
+				// Successfully sent
+			default:
+				// Channel is full or closed, skip
+			}
 		}
 		delete(r.contentWaiters, key)
 	}

@@ -352,24 +352,28 @@ func runSingleValueAndCache[IN, OUT any](ctx context.Context, item *keyStatus[IN
 	if funcOpts.EnableTiming {
 		functionComplete()
 	}
+	if err != nil {
+		unlockIfNeeded(ctx, functionConfig.cache, item)
+		var zero OUT
+		return zero, err
+	}
 	if len(singleResult) != 1 {
-		err = fmt.Errorf("expected 1 result, got %d", len(singleResult))
+		unlockIfNeeded(ctx, functionConfig.cache, item)
+		var zero OUT
+		return zero, fmt.Errorf("expected 1 result, got %d", len(singleResult))
 	}
-	if err == nil {
-		// Save to cache
-		cacheVal, err := serializeResultsToCache(funcOpts, []reflect.Value{reflect.ValueOf(singleResult[0])}, functionConfig.outputValueHandlers)
-		if err != nil {
-			log.Printf("Error serializing to cache: %v", err)
-			unlockIfNeeded(ctx, functionConfig.cache, item)
-		} else {
-			err = functionConfig.cache.saveToCache(ctx, item.key, cacheVal, funcOpts)
-			if err != nil {
-				log.Printf("Error setting cache: %v", err)
-				unlockIfNeeded(ctx, functionConfig.cache, item)
-			}
-		}
+	// Save to cache
+	cacheVal, err := serializeResultsToCache(funcOpts, []reflect.Value{reflect.ValueOf(singleResult[0])}, functionConfig.outputValueHandlers)
+	if err != nil {
+		unlockIfNeeded(ctx, functionConfig.cache, item)
+		return singleResult[0], fmt.Errorf("failed to serialize to cache: %w", err)
 	}
-	return singleResult[0], err
+	err = functionConfig.cache.saveToCache(ctx, item.key, cacheVal, funcOpts)
+	if err != nil {
+		unlockIfNeeded(ctx, functionConfig.cache, item)
+		return singleResult[0], fmt.Errorf("failed to save to cache: %w", err)
+	}
+	return singleResult[0], nil
 }
 
 // unlockIfNeeded unlocks the cache for the given key if the lock was acquired.
